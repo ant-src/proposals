@@ -50,7 +50,7 @@ The script exit adds a third, smaller problem. `String.from` renders the error a
 | Language | Mechanism | What a wrapped error keeps |
 | --- | --- | --- |
 | Go | `fmt.Errorf("load config: %w", err)`, `errors.Unwrap`, `errors.Is`, `errors.As`, `errors.Join` | The message text, joined with `: `, and the cause as a value for `Is` and `As` |
-| Rust | `std::error::Error::source()`; anyhow `.context("...")` and `.with_context(\|\| ...)`; thiserror `#[source]` | A cause chain, printed one per line by `{:#}` or as "Caused by:" |
+| Rust | `std::error::Error::source()`; anyhow `.context("...")` and `.with_context(\|\| ...)`; thiserror `#[source]` | A cause chain; anyhow's `{:#}` joins it on one line with `: `, and `{:?}` prints it as "Caused by:" lines |
 | Gleam | `Result` values, `result.map_error`; the `snag` package adds `snag.context` | A list of context lines in front of the original message |
 | Zig | Error sets with no payload; error return traces in debug builds | Only the error name; the trace is built by the runtime |
 | Java, Kotlin, C# | `new Exception(msg, cause)`, `InnerException` | A cause object, printed as "Caused by:" in the stack trace |
@@ -60,7 +60,7 @@ The script exit adds a third, smaller problem. `String.from` renders the error a
 
 Three lessons shape the proposal:
 
-- **The message is what users read.** In Go, most `%w` wrapping is read by people, not by code. `errors.Is` and `errors.As` matter only when an error has an identity to match: a sentinel like `fs.ErrNotExist` or a typed error. Ant's `Error` has no identity apart from its text, so a cause chain would be text with extra structure that nothing can match against.
+- **The message is what users read.** In Go, most `%w` wrapping is read by people, not by code. `errors.Is` and `errors.As` matter only when an error has an identity to match: a sentinel like `fs.ErrNotExist` or a typed error. Ant's library defines no sentinel errors and no error kinds, so a cause chain of library errors would be text with extra structure that nothing standard can match against. A program can keep its own sentinel `Error` and compare it with `Record.same`, but a program that matches errors is better served by a typed error (see Typed errors).
 - **Context must cost one call.** anyhow's `.context()` and Gleam's `snag.context` became the norm because they cost one call. Go's `if err != nil { return fmt.Errorf(...) }` costs three lines, and Go code often skips it.
 - **Typed errors carry structure in their own types.** Rust's thiserror, Swift's typed `throws`, and Ant's own tagged unions (section 8) put the fields that code branches on into a type the author declares. A library wrapping helper does not need to carry them.
 
@@ -102,6 +102,7 @@ A new paragraph in section 8 and in the introduction of `stdlib.md` states the c
 - A message is lowercase and has no closing punctuation, because it may end up in the middle of a longer message.
 - Context names the operation and the argument that matters: `parse /etc/app.json`, not `failed to parse config file!`. Words such as "error" and "failed" add nothing, since the text is already an error.
 - The function that knows an argument adds it. `File.read` already names its path, so the caller does not repeat it. A caller adds what it was doing, which the callee cannot know.
+- An error that comes from a context names no target. A blocking call whose context ends returns the context's reason, such as `cancelled` or `timeout` (section 9, Waiting), so a caller that wants the URL or path in the message adds it.
 
 ### Typed errors
 
@@ -135,8 +136,8 @@ The sketch in `ant/TODO.md` adds a cause and the helpers `Error.root` and `Error
 
 - **It breaks every literal.** A record literal must list all of its type's fields (section 4), so each `Error{ message: "x" }` becomes `Error{ message: "x", cause: null }`. The spec has 3 such literals and the `ant` tests and examples have 121. Avoiding this needs field defaults, which would change the literal rule for every record type to serve one type.
 - **It doubles the output.** `String.from` and `==` follow every field, so a wrapped error renders its full chain as nested records, and the readable form needs a custom renderer.
-- **Nothing reads the chain.** `Error.root(e).message` holds the same text as the end of the joined message. A chain pays off only when the root has an identity to match, which `Error` does not have (see Non-goals).
-- **The cause can only be an `Error`.** A field typed with a tagged union of the program's own cannot be generic over every error type: a union may hold only one anonymous record type, and the language has no `any` type. A user error must still become an `Error` before it can be wrapped, which is the same step this proposal requires.
+- **Little reads the chain.** `Error.root(e).message` holds the same text as the end of the joined message. A chain pays off when the root has an identity to match. The library defines no sentinels or kinds (see Non-goals). A program's own sentinel, compared with `Record.same`, would survive in a chain but not through `Error.wrap`, which builds a fresh record. Such a program declares a typed error instead.
+- **A typed cause is a separate choice.** `cause: {} | null` would accept any record, including a program's own error, and `is` recovers its fields after a `null` test (section 5, `is`). The proposal leaves typed causes out on purpose: the readable form would render an arbitrary record with `String.from` inside a message, an error type that is not a record, such as a named primitive over `string`, does not fit `{}`, and a typed cause already has a home as a field of the typed error that wraps it.
 
 ### A `try` clause
 
@@ -159,7 +160,7 @@ This is anyhow's and snag's name for the function. It is declined because Ant al
 | §10, Scripts | An `Err` holding an `Error` writes its `message` and a newline; any other error is written with `String.from` as now |
 | §11, Prelude | `Error`'s comment points to its functions |
 | §11, Result and Record | Renamed to Result, Error, and Record; adds the two signatures |
-| `stdlib.md` introduction | The message convention, and that library messages already name the path, address, or URL they concern |
+| `stdlib.md` introduction | The message convention, and that library messages name the path, address, or URL they concern, except an error that is a context's reason |
 | `stdlib/prelude.ant` | Doc comments for the two functions, generated from the spec text |
 
 In the Go interpreter both functions are a few lines in `internal/lib`, next to `Result.mapErr`, and the script exit adds one tag check where the runtime renders the final error. The JS backend needs the same code.
