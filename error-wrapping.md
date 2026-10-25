@@ -174,5 +174,9 @@ In the Go interpreter both functions are a few lines in `internal/lib`, next to 
 
 ## Open questions
 
-- [ ] Should `Error.wrap(e, "")` return the message unchanged instead of `": message"`, or should an empty context panic?
-- [ ] Should the script-exit change go further and write any error type with a `message: string` field as bare text, not only `Error`?
+Decided when the proposal was accepted (spec 9ce9a55, ant 06ed207):
+
+| Question | Decision |
+| --- | --- |
+| `Error.wrap(e, "")`? | Joined like any other context, giving `": message"`; no special case and no panic |
+| Bare text for any error with a `message` field? | No; only the `Error` tag. Other errors keep `String.from`, so a typed error shows its fields |

@@ -7,7 +7,7 @@ touches. Nothing here is part of the language until it is accepted and written i
 | Proposal                       | Summary                                                                   | Status |
 | ------------------------------ | ------------------------------------------------------------------------- | ------ |
 | [parallel.md](parallel.md)     | `Parallel.map`, `each`, `run` and `race`: bounded, joined fan-out         | Draft  |
-| [error-wrapping.md](error-wrapping.md) | `Error.wrap` and `Result.wrapErr`: context on an `Error`, joined with `: ` | Draft |
+| [error-wrapping.md](error-wrapping.md) | `Error.wrap` and `Result.wrapErr`: context on an `Error`, joined with `: ` | Accepted |
 
 ## Process
 
