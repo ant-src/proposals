@@ -163,7 +163,7 @@ In the Go interpreter each call is a `sync.WaitGroup`, a buffered channel as a s
 - **Futures, promises, `async`/`await`.** They bring back handles that can leak and the function coloring that section 9 rejects.
 - **Changing `go`.** It stays unstructured, as in Go, for fire-and-forget work, long-lived loops and self-spawning work.
 - **`Group`, for now.** See above; it can follow if self-spawning work proves common.
-- **Catchable panics.** `Parallel` propagates panics; no code can recover from one.
+- **Catching panics itself.** `Parallel` raises a callback's panic again in the caller; a caller that must survive it wraps the call in `Panic.catch` (section 8, Catching a panic), which sees the original message and trace.
 - **Actors, supervisors, data parallelism, STM.** Out of scope for an interpreter that is meant to stay simple.
 
 ## Open questions
