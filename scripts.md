@@ -157,9 +157,9 @@ Decided after review:
 | --- | --- |
 | Does the program end when the script's last item has run, even with goroutines running? | Yes, today's rule: the main goroutine ending ends the program |
 | Where is an import of a script reported? | At the import, naming the imported module's first top-level statement |
+| `export` in a script? | A syntax error, as proposed |
+| Reject an uncalled `func main` during migration? | No. Ant is new; the migration script rewrites every program, and the checker gets no rule for the name |
 
 Still open:
 
-- [ ] Should `export` in a script be a syntax error, as proposed, or meaningless? The error is what makes a stray statement in a library visible in the library itself, rather than only at its importers.
 - [ ] Should a top-level `try` on an `Err` end the program, printing the error and exiting with status 1, as Swift's top-level `try` does? It is the script-friendly choice; strict-first keeps it a syntax error until scripts show the need, and lifting the error later breaks nothing.
-- [ ] Should the checker reject a `func main` that nothing calls during the migration? The review leans yes: a silent exit 0 that skips the program's work is the worst failure. The checker has no warnings, so it would be a temporary compile error in the implementation, not in the spec, removed once `ant` and `spec` are migrated.
