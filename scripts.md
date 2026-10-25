@@ -137,7 +137,7 @@ Libraries keep the current rule: they have no top-level code to narrow in, and t
 ### Tooling
 
 - **`ant fmt`** lays out the top level as a broken block at indentation zero already (fmt.md 4.3). The rule that a file of top-level statements is a syntax error goes away.
-- **The library tables.** `ant/tests/stdlib/*.ant` are files of top-level statements, each line checked against its `// =>` comment, and fmt.md names them as the files it rejects. They parse as scripts once this lands, so `ant fmt .` formats them. Formatting keeps every line break and aligns runs of trailing comments (fmt.md 3, 4.8), so the tables stay one call per line; they are formatted once when this lands and kept formatted, like every other file.
+- **The library tables.** `ant/tests/stdlib/*.ant` are files of top-level statements, each line checked against its `// =>` comment, and fmt.md names them as the files it rejects. They parse as scripts once this lands, but they stay out of the formatted corpus: the harness reads them one input per line, and a line that starts with a regular expression literal is its own input there, while the whole file would read it as a division continuing the line before.
 - **`ant doc`** documents a script's module doc (`//!`), which says what the program does and how to run it. A script has no exports to list.
 - **Host API** (implementation, not spec). `Load` no longer fails for a missing `main`. `Run` initializes every module, the script last, and returns as it does today. `Start` initializes too, so `Start` on a script runs the script; a host that wants to call functions loads a library. `Instance.Func` and `Value` are unchanged.
 - **REPL.** `Session` already evaluates statements; a file and a session now accept the same items.
