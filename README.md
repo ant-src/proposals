@@ -7,7 +7,7 @@ touches. Nothing here is part of the language until it is accepted and written i
 | Proposal                       | Summary                                                                   | Status |
 | ------------------------------ | ------------------------------------------------------------------------- | ------ |
 | [parallel.md](parallel.md)     | `Parallel.map`, `each`, `run` and `race`: bounded, joined fan-out         | Draft  |
-| [scripts.md](scripts.md)       | Drop `main`: top-level statements in one script, which cannot be imported | Draft  |
+| [scripts.md](scripts.md)       | Drop `main`: top-level statements in one script, which cannot be imported | Accepted |
 
 ## Process
 

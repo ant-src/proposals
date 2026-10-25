@@ -1,10 +1,10 @@
 # Proposal: scripts without `main`
 
-2026-10-25 · Anton
+2026-10-25 · Anton · Accepted
 
 ## Summary
 
-Drop `func main()`. A module may hold statements at the top level, between and after its declarations, and `ant run` executes them in source order as the last step of initialization. A module with at least one top-level statement is a **script**. A script cannot be imported and cannot export, so a program has exactly one script, the file given to `ant run`, and every other module stays a library: declarations whose `var` initializers may still run code, as today. A script's top-level `var`s narrow like locals. `func`, `type`, `import` and `export` are unchanged, and no new keyword or syntax is added.
+Drop `func main()`. A module may hold statements at the top level, between and after its declarations, and `ant run` executes them in source order as the last step of initialization. A module with at least one top-level statement is a **script**. A script cannot be imported and cannot export, so a program has exactly one script, the file given to `ant run`, and every other module stays a library: declarations whose `var` initializers may still run code, as today. A script's top-level code is the body of an implicit function that the runtime calls: `return`, `try` and `?? return` work in it, an `Err` it returns ends the program with status 1 and the error on standard error, and its top-level `var`s narrow like locals. `func`, `type`, `import` and `export` are unchanged, and no new keyword or syntax is added.
 
 ```ant
 // hello.ant
@@ -84,10 +84,37 @@ println(`${total} total`)
 
 The program ends when the script's last item has run, whatever other goroutines are doing, exactly as it ends today when `main` returns. The goroutine that initializes the modules and runs the script is the **main goroutine**; nothing else about goroutines changes.
 
-- **`defer`** at the top level registers on the script's body. Deferred blocks run when the last item has run or when a panic unwinds the main goroutine, in reverse order, before the program exits. `Os.exit` still skips them.
-- **`return`** at the top level is already a syntax error: it is outside any boundary (section 5), and nothing here changes that. A script that needs to leave early either calls `Os.exit(status)` or puts its logic in a function and calls it; `func main() { ... }` followed by `main()` is an ordinary program, and the name has no special meaning.
-- **`try`** and **`?? return`** at the top level are syntax errors too, by the same rule: section 8 already forbids `try` in a top-level initializer outside a lambda, and a statement is no different. `var text = try File.read(path)` in a script does not parse; the example above moves the `try` into a function. Whether a top-level `try` on an `Err` should end the program instead is an open question.
-- **Exit status** is `0` when the last item has run, `1` when the main goroutine panics, and `2` when the program could not be loaded: a syntax error, an import cycle, a missing module, or an import of a script.
+A script's top-level code is the body of an implicit function, the **script body**, which only the runtime calls. It is a boundary in the sense of section 5, so everything a function body allows, the script allows, by the existing rules:
+
+- **`return`** leaves the script early. Its deferred blocks run, which `Os.exit` skips.
+- **`try`** on an `Err` returns that `Err` from the script, and **`?? return`** returns the value after it.
+- **`defer`** registers on the script body. Deferred blocks run when the body ends, by its last item, by `return`, or by a panic unwinding the main goroutine, in reverse order, before the program exits.
+
+```ant
+var text = try File.read(path)
+var user = find(id) ?? return Result.err(Error{ message: `no user ${id}` })
+if len(Os.args()) == 0 {
+  println("usage: count FILE...")
+  return
+}
+```
+
+The script body differs from a function body in one way: **its last expression is discarded.** Only a `return`, written or reached through `try` or `?? return`, gives it a result. Otherwise a script ending in `File.write(...)` would exit 1 when the write failed, and appending a `println` would hide that failure again.
+
+The checker allows a script to return `void` or an `Err`: a bare `return`, `try`, `return Result.err(...)`, or `?? return` with such a value. `return 5` is a compile error. At run time the result decides the exit:
+
+| The script body… | Exit status | Standard error |
+| --- | --- | --- |
+| runs its last item, or returns a value that is not an `Err` | `0` | nothing |
+| returns an `Err` | `1` | `String.from` of its `error` and a newline |
+| panics | `1` | the message and a stack trace, as today |
+| could not be loaded: a syntax error, an import cycle, a missing module, or an import of a script | `2` | the error |
+
+`try` and `Result.unwrap` both end a script on an `Err`, but they say different things. `try` is an expected failure, reported as the error alone after the deferred blocks run; `unwrap` is a bug, reported as a panic with its trace. That is the split section 1 makes between errors and panics.
+
+A bare `x ?? return` exits with status 0, which is what it says. A script that means failure returns an `Err`.
+
+Libraries have no script body: `return`, `try` and `?? return` in a library's top-level initializer stay syntax errors, as today. `func main() { ... }` followed by `main()` is an ordinary program, and the name has no special meaning.
 
 ### Narrowing
 
@@ -100,7 +127,7 @@ if text is Ok {
 }
 ```
 
-A script cannot be imported, so its top-level `var`s are assigned only by its own code. The checker can then treat the script's top-level code as the body of a function and its `func` declarations as nested bodies, and the existing closure rule applies unchanged:
+A script cannot be imported, so its top-level `var`s are assigned only by its own code. The script body is a function body, so they are its locals for narrowing, the script's `func` declarations count as nested bodies, and the existing closure rule applies unchanged:
 
 - In top-level code, a script's `var` narrows like a local, unless some nested body assigns it, a `func` declaration included.
 - Inside a `func`, a script's `var` starts at its declared type, as an outer local does inside a nested body today, with no exception. Section 7 lets a local that is never assigned after its declaration keep its narrowing inside nested bodies; a `func` declaration does not get that exception, because it is hoisted and has no position: it can be called before the test that narrowed the variable has run. A lambda, a `go` block or a `defer` block written in top-level code is created where it stands and keeps the exception as it does in any function.
@@ -124,9 +151,9 @@ Ant is unreleased, so `main` is removed rather than deprecated. The rewrite is m
 
 - **Section 3 (Variables).** Extend "a top-level initializer may refer directly … only to the `var`s above it" to top-level statements.
 - **Section 4 (Checking and running).** "A syntax error anywhere stops the program before `main`" becomes "before any module is initialized".
-- **Section 5 (`return`, `break`, `continue`).** Unchanged; the rule that `return` outside any boundary is a syntax error already covers top-level statements.
+- **Section 5 (`return`, `break`, `continue`).** The script body is a boundary. `return` outside any boundary, which now means in a library's top-level initializer outside a lambda, stays a syntax error.
 - **Section 7 (Narrowing).** Add the script rule above to the paragraph on top-level `var`s, including why a `func` declaration does not get the never-assigned exception.
-- **Section 8 (`try`).** "In a top-level initializer outside a lambda" becomes "in a top-level initializer or statement outside a lambda".
+- **Section 8 (`try`).** `try` in a script body returns from it; "in a top-level initializer outside a lambda" becomes "in a library's top-level initializer outside a lambda".
 - **Section 9 (Goroutines).** "The program exits when the main goroutine returns" becomes "when the script's last item has run". Define the main goroutine as the one that initializes the modules.
 - **Section 10 (Modules).** Replace "Nothing else appears at the top level" with the item list and the definition of a script, add the two script rules, replace the paragraph on `main` with the evaluation and ending rules, and update the exit statuses. "`ant run` stops before `main`" on an import cycle becomes "before initializing any module".
 - **Section 12 (Dynamic semantics).** Names and scopes: a script's top level is the module scope, and a `var` declared in a top-level `if`, `for` or other block belongs to that block's scope. Deferred blocks and panics: a script's body is the main goroutine's root block. Goroutines: "the program ends when `main` returns" becomes "when the script ends". Runtime panics: the `var` row becomes "read or assigned before its initializer has run".
@@ -144,7 +171,7 @@ Ant is unreleased, so `main` is removed rather than deprecated. The rewrite is m
 
 ## Non-goals
 
-- **Top-level `return` or an exit value.** `Os.exit` and a called function cover early exit.
+- **An exit status from `return`.** `return 3` is a compile error; `Os.exit` is the one way to choose a status other than `0` and `1`.
 - **A shebang line.** Useful for scripts and independent of this proposal; it belongs in section 2.
 - **Implicit `args`.** `Os.args()` stays the one way to read the command line.
 - **Printing the last expression.** That is the REPL's job, not `ant run`'s.
@@ -160,6 +187,5 @@ Decided after review:
 | `export` in a script? | A syntax error, as proposed |
 | Reject an uncalled `func main` during migration? | No. Ant is new; the migration script rewrites every program, and the checker gets no rule for the name |
 
-Still open:
-
-- [ ] Should a top-level `try` on an `Err` end the program, printing the error and exiting with status 1, as Swift's top-level `try` does? It is the script-friendly choice; strict-first keeps it a syntax error until scripts show the need, and lifting the error later breaks nothing.
+| `try` at the top level? | The script body is an implicit function: `return`, `try` and `?? return` work, an `Err` result exits 1 with the error, the last expression is discarded, and a script returns `void` or an `Err`. Precedent: Rust's `main() -> Result`, Zig's `main() !void`, C#'s synthesized `Main` |
+| How does a returned `Err` print? | `String.from` of the error, no special case for a `message` field |
