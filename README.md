@@ -6,6 +6,7 @@ touches. Nothing here is part of the language until it is accepted and written i
 
 | Proposal                       | Summary                                                                   | Status |
 | ------------------------------ | ------------------------------------------------------------------------- | ------ |
+| [assert.md](assert.md)         | `assert(cond, message?)`: always on, shows compared values, narrows       | Draft  |
 | [parallel.md](parallel.md)     | `Parallel.map`, `each`, `run` and `race`: bounded, joined fan-out         | Draft  |
 
 ## Process
