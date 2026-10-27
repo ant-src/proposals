@@ -58,18 +58,18 @@ typos." The typo half of that rule is worth keeping; the "exactly" half costs mo
 
 ## Prior art
 
-| Language            | Field defaults                                                      | Fields left out of a literal                                                          | When a default is evaluated                   | What a default may be                            |
-| ------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------ |
-| Go                  | none                                                                | any field, which takes its type's zero value                                          | —                                             | —                                                |
-| Rust                | none on stable; RFC 3681 `age: i128 = 42` is unstable               | none, unless the literal ends in `..` (RFC) or `..Default::default()`                 | at compile time                               | a constant                                       |
-| Zig                 | `a: i32 = 1`                                                        | fields with a default                                                                 | at compile time                               | a comptime value                                 |
-| Swift               | `var port = 80` on a stored property                                | the memberwise initializer takes defaulted properties as optional arguments (SE-0242) | per initialization                            | any expression                                   |
-| Kotlin              | defaults on the data class constructor's parameters                 | parameters with a default, by name                                                    | per call; may read earlier parameters         | any expression                                   |
-| C#                  | property initializers; `required` (C# 11) forces a member to be set | members not marked `required`                                                         | per construction                              | any expression                                   |
-| Dart                | defaults on named constructor parameters; `required` marks the rest | parameters with a default                                                             | at compile time                               | a constant                                       |
-| Python dataclasses  | `port: int = 80`; `field(default_factory=list)`                     | fields with a default                                                                 | once, at class creation; a factory per object | anything but an unhashable value, such as a list |
-| TypeScript          | none; `port?: number` makes a property optional                     | optional properties, which read as `undefined`                                        | —                                             | —                                                |
-| Elm, Haskell, Gleam | none                                                                | none; the idiom is updating a defaults record, `{ default \| port = 80 }`             | —                                             | —                                                |
+| Language            | Field defaults                                                      | Fields left out of a literal                                                                                                       | When a default is evaluated                   | What a default may be                            |
+| ------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------ |
+| Go                  | none                                                                | any field, which takes its type's zero value                                                                                       | —                                             | —                                                |
+| Rust                | none on stable; RFC 3681 `age: i128 = 42` is unstable               | none, unless the literal ends in `..` (RFC) or `..Default::default()`                                                              | at compile time                               | a constant                                       |
+| Zig                 | `a: i32 = 1`                                                        | fields with a default                                                                                                              | at compile time                               | a comptime value                                 |
+| Swift               | `var port = 80` on a stored property                                | the memberwise initializer takes defaulted properties as optional arguments (SE-0242); an optional `var x: T?` is implicitly `nil` | per initialization                            | any expression                                   |
+| Kotlin              | defaults on the data class constructor's parameters                 | parameters with a default, by name                                                                                                 | per call; may read earlier parameters         | any expression                                   |
+| C#                  | property initializers; `required` (C# 11) forces a member to be set | members not marked `required`                                                                                                      | per construction                              | any expression                                   |
+| Dart                | defaults on named constructor parameters; `required` marks the rest | parameters with a default                                                                                                          | at compile time                               | a constant                                       |
+| Python dataclasses  | `port: int = 80`; `field(default_factory=list)`                     | fields with a default                                                                                                              | once, at class creation; a factory per object | anything but an unhashable value, such as a list |
+| TypeScript          | none; `port?: number` makes a property optional                     | optional properties, which read as `undefined`                                                                                     | —                                             | —                                                |
+| Elm, Haskell, Gleam | none                                                                | none; the idiom is updating a defaults record, `{ default \| port = 80 }`                                                          | —                                             | —                                                |
 
 What Ant takes:
 
@@ -124,7 +124,8 @@ the defaults are part of the signature a reader sees.
    field still without a value, in declaration order, the field's default is evaluated and stored. A
    default is evaluated only when it is used: a field given a value, by an entry or by a spread,
    never evaluates its default. Each evaluation is fresh, so `tags: Array[string] = []` gives each
-   record its own array.
+   record its own array. Fresh evaluation is not a copy: `tags: Array[string] = sharedTags` reads
+   the variable each time and shares the one array it holds, as a parameter default would.
 3. **Scope.** A default is evaluated in the top-level scope of the module that declares the type, as
    a function body declared there would see it: the module's top-level names, its imports and the
    prelude. It does not see the literal's scope, so a literal in another module that builds
@@ -176,6 +177,18 @@ var e = Config.Config{ host: "example.com" }            // e.headers is a new, e
 An enumeration of empty records gains nothing, and a record whose fields all have defaults can be
 built with an empty literal, `Config{}`, which reads as "the defaults".
 
+## When to use a default
+
+A default suits a field that callers set independently of the others: a timeout, a flag, a list that
+starts empty. It does not suit fields that must agree. Zig's documentation warns about this case:
+with `min: int = 0, max: int = 100`, a caller who sets only `max: -1` builds a record that breaks
+the invariant `min <= max` without writing either value wrong. Such fields stay required, or the
+type gets a function, `Range.new(min, max)`, that checks them together.
+
+A field every caller should think about stays without a default even when most callers would write
+the same value. Leaving the default off is how a new field makes every literal fail to check until
+someone decides.
+
 ## Considered and rejected
 
 - **Go's zero values.** Omitting any field, filled with `0`, `""`, `false`, `null` or an empty
@@ -184,11 +197,15 @@ built with an empty literal, `Config{}`, which reads as "the defaults".
   error. The `ant/TODO.md` sketch proposed this; the open questions there are what led to declared
   defaults.
 - **Implicit `null` for nullable fields.** Letting `nickname: string | null` default to `null`
-  without writing `= null`. It is the most common default, but it would make a field's optionality
-  depend on its type rather than on what the author wrote, and `= null` is seven characters.
+  without writing `= null`, as Swift does for an optional stored property in its memberwise
+  initializer. It is the most common default, but it would tie two separate facts together: that
+  `null` is a valid value and that omission is allowed. Keeping them apart gives one rule for every
+  field, and `= null` is seven characters.
 - **A marker at the literal.** Rust's `Server{ addr: ":80", .. }`. It shows the reader that fields
-  were left out, but Ant's calls have no such marker, and `...` already means a spread in a literal,
-  so the two spellings would sit one dot apart.
+  were left out, and it keeps a way to demand an exhaustive literal: one without `..` must still
+  list every field, so a caller who wants to hear about a new defaulted field gets a compile error.
+  But it adds syntax to routine construction, Ant's calls have no such marker for omitted arguments,
+  and `...` already means a spread in a literal, so the two spellings would sit one dot apart.
 - **Defaults that read other fields.** `end: int = start + 10`. It needs an order among fields and a
   rule for a field that reads one given later. A function on the type says the same thing with no
   new rules.
@@ -230,6 +247,9 @@ built with an empty literal, `Config{}`, which reads as "the defaults".
 - Constructors. Functions on types (section 6) remain the way to validate or derive fields.
 
 ## Open questions
+
+- Whether a caller needs a way to demand an exhaustive literal after all, through the marker
+  rejected above or something else. Revisit if programs show a real need.
 
 - Whether a default may read the fields given before it in declaration order, as a parameter default
   may read earlier parameters (section 12, Call). Rejected above for simplicity; it would let
