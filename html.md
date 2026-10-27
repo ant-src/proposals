@@ -5,13 +5,16 @@
 ## Summary
 
 Add HTML as an expression. `<p>Hello, {name}</p>` is an expression of the new built-in type `Html`,
-an immutable value that holds markup. A string interpolated with `{...}` is escaped; an `Html` value
-is inserted as it is. Components are ordinary functions that return `Html` and are called with
-ordinary calls. `<>...</>` is a fragment. `<script>` and `<style>` hold literal text and take no
-interpolation, nor do `on*`, `style`, and `srcdoc` attributes, and an interpolated URL attribute is
-checked for its scheme. `Html.raw(s)` is the one way to turn a string into markup. White space that
-holds a line break collapses as a browser would collapse it. The grammar keeps its one token of
-lookahead: `<` begins an element by the same rule that makes `/` begin a regular expression.
+an immutable tree of elements, text, and trusted markup. `String.from` renders it to markup for a
+server response; later, a DOM renderer and a server component stream in the JavaScript backend
+consume the same value (see Designed for later). A string interpolated with `{...}` becomes text,
+which the renderer escapes; an `Html` value is inserted as it is. Components are ordinary functions
+that return `Html` and are called with ordinary calls. `<>...</>` is a fragment. `<script>` and
+`<style>` hold literal text and take no interpolation, nor do `on*`, `style`, and `srcdoc`
+attributes, and an interpolated URL attribute is checked for its scheme. `Html.raw(s)` is the one
+way to turn a string into markup. White space that holds a line break collapses as a browser would
+collapse it. The grammar keeps its one token of lookahead: `<` begins an element by the same rule
+that makes `/` begin a regular expression.
 
 ## Motivation
 
@@ -41,6 +44,7 @@ func row(u: User): string {
 | Approach                      | Examples                                                                           | What Ant takes                                                                                        |
 | ----------------------------- | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | Markup as an expression       | JSX/TSX (React, Preact, Solid); templ (Go); Rust `maud`, `rsx`                     | The syntax: elements, `{...}` interpolation, fragments `<>`, self-closing tags                        |
+| One value, several renderers  | React elements (`renderToString`, DOM, Server Components); Leptos `view!`          | `Html` is a tree that a string renderer, and later a DOM renderer and a stream, all read              |
 | XML literals                  | Scala 2, VB.NET, E4X in JavaScript                                                 | A warning. Scala 3 and JavaScript dropped them: they were tied to an XML tree type and XML namespaces |
 | Contextual autoescaping       | Go `html/template`, Google Closure Templates                                       | The goal, not the method. Ant forbids the hard contexts instead of parsing CSS and JavaScript         |
 | Escape by default, raw opt-in | Svelte `{@html}`, React `dangerouslySetInnerHTML`, Go `template.HTML`, Rails `raw` | `Html.raw`: one named, greppable function                                                             |
@@ -55,9 +59,11 @@ Three lessons shape the proposal:
   default is safe in practice; every one that made escaping opt-in, PHP and early Rails among them,
   produced a generation of XSS. The bypass is searchable in each: `dangerouslySetInnerHTML`,
   `{@html}`, `template.HTML`.
-- **The value is markup, not a tree.** JSX needs a virtual DOM because it renders on the client;
-  Scala's XML literals died partly because they built a tree nobody wanted. A server renders to
-  bytes. A type that wraps markup is all the safety needs.
+- **The value is a description, not a document.** A React element is a plain description that the
+  server renders to a string, the browser to DOM nodes, and React Server Components to a stream with
+  client components left as references. A markup string serves only the first. Scala's XML literals
+  show the opposite risk: their tree was an XML document model, queried and transformed, tied to
+  namespaces, and it went with them. Ant's tree is opaque and knows only HTML.
 - **Contexts are where escaping breaks.** Escaping is correct for text and quoted attributes. It is
   not correct inside `<script>`, inside `style`, or in an `onclick` attribute, and Go needs a CSS
   and JavaScript lexer to handle them. Few programs need to interpolate there, so Ant forbids it.
@@ -121,30 +127,39 @@ tag:
   renders nothing (see White space). The doctype is written where the page becomes a response (see
   Serving a page).
 
-The element is an expression of type `Html`. Its value is the markup, built from left to right:
-attributes in order, then content in order (section 12, Expressions).
+The element is an expression of type `Html`. Its value is an element node with the name, the
+attributes, and the children, built from left to right: attributes in order, then content in order
+(section 12, Expressions).
 
 ### Text and interpolation
 
-Between tags, text is markup written by the author and is kept as written, apart from the white
-space rule below. `&amp;` stays `&amp;`, so the author writes entities as in an `.html` file. Three
-characters are special: `<` begins a tag, `{` begins an interpolation, and `}` alone is a syntax
-error. A literal brace is `&#123;` and `&#125;`, or `{"{"}`.
+Between tags, text is written as in an `.html` file. The parser decodes it into a string: a
+character reference such as `&amp;`, `&nbsp;`, or `&#8212;` becomes the character it names, so the
+text node holds `&`, and the renderer escapes it again on the way out. A reference that names no
+character, such as `&nbps;`, is a syntax error; an `&` that does not begin one, followed by a space
+for instance, is a plain `&`. The names are the WHATWG list, generated into a table as the Unicode
+tables are. Three characters are special: `<` begins a tag, `{` begins an interpolation, and `}`
+alone is a syntax error. A literal brace is `&#123;` and `&#125;`, or `{"{"}`.
 
 `{expr}` interpolates any expression; braces nest inside it as in `${...}` of a template string, so
 lambdas and record literals can appear there. The value goes in by its kind:
 
-| Value          | Renders as                                                      |
-| -------------- | --------------------------------------------------------------- |
-| `Html`         | its markup, unchanged                                           |
-| `string`       | the string escaped: `&`, `<`, `>`, `"`, and `'` become entities |
-| a number       | `String.from(n)`, which needs no escaping                       |
-| `null`, `void` | nothing                                                         |
-| an array       | each element in order by these rules, with nothing between them |
+| Value          | Becomes                                                    |
+| -------------- | ---------------------------------------------------------- |
+| `Html`         | its nodes, unchanged                                       |
+| `string`       | a text node; the string renderer escapes it                |
+| a number       | a text node holding `String.from(n)`                       |
+| `null`, `void` | nothing                                                    |
+| an array       | each element in order by these rules, nothing between them |
+
+A text node holds text, never markup, so no renderer can mistake one for the other: the string
+renderer writes `&`, `<`, `>`, `"`, and `'` as entities, and a DOM renderer sets the node's text,
+which needs no escaping at all.
 
 The checker accepts a union of these types, and arrays of them at any depth. Any other type is a
 compile error, and a panic at run time: a record, a map, a function, a `bool`, and a named primitive
-type. `String.from` of a record would put `Point{ x: 1.0 }` on a page, which is a bug and not a
+type. A function is excluded only for now; the UI proposal may give it a meaning (see Designed for
+later). `String.from` of a record would put `Point{ x: 1.0 }` on a page, which is a bug and not a
 rendering, and `UserId("u-1")` likewise; write `{string(id)}`. A `bool` is excluded for the same
 reason: `true` on a page is almost always a mistake.
 
@@ -172,17 +187,23 @@ is a lambda (section 5, Blocks), and the `<` after it begins an element:
 
 An attribute is one of:
 
-- `name="text"`: literal text, written by the author and kept as written. `"` ends it; entities work
-  as in content. There is no interpolation inside the quotes, and single quotes are not accepted.
-- `name={expr}`: a value. A `string` is escaped as in content; a number renders with `String.from`;
-  `true` writes the bare name, a boolean attribute; `false` and `null` leave the attribute out. Any
-  other type is a compile error and a panic.
+- `name="text"`: literal text, written by the author. `"` ends it, and character references are
+  decoded as in content. There is no interpolation inside the quotes, and single quotes are not
+  accepted.
+- `name={expr}`: a value. A `string` is the value as it is; a number is `String.from(n)`; `true`
+  makes a boolean attribute; `false` and `null` leave the attribute out. Any other type is a compile
+  error and a panic.
 - `name` alone: a boolean attribute, as `name={true}`.
 
-A name starts with an ASCII letter or `_` and continues with letters, digits, `-`, `_`, `:`, and
-`.`, so `data-id`, `aria-label`, `hx-get`, and `xlink:href` work. An attribute written twice on one
-element is a syntax error. Attributes render in written order, separated by one space, each value in
-double quotes.
+An attribute's value is a string in the tree, like a text node, and the renderer escapes it. A name
+starts with an ASCII letter or `_` and continues with letters, digits, `-`, `_`, `:`, and `.`, so
+`data-id`, `aria-label`, `hx-get`, and `xlink:href` work. An attribute written twice on one element
+is a syntax error. The string renderer writes attributes in written order, separated by one space,
+each value in double quotes and a boolean attribute as its bare name.
+
+`key` is reserved: `key="..."` and `key={...}` are syntax errors for now. A DOM renderer that
+updates a list needs an identity for each item, and every framework that has one calls it `key`, so
+the name is kept free rather than taken back from programs later (see Designed for later).
 
 ```ant
 <input type="checkbox" name={field} checked={task.done} disabled />
@@ -203,7 +224,8 @@ so the parser enforces them with no knowledge of types.
    attributes follow the ordinary rules, so `<script src={bundle} defer />` works.
 2. **Attributes that run code** take only literal text: every name that starts with `on`, `style`,
    and `srcdoc`. `onclick={handler}` and `style={css}` are syntax errors whose message names the
-   alternative: a `data-` attribute that a script reads, or a class.
+   alternative: a `data-` attribute that a script reads, or a class. A string is never allowed
+   there; the UI proposal may let `on*` take an Ant function, which puts no text into JavaScript.
 3. **URL attributes**, `href`, `src`, `action`, `formaction`, `cite`, `poster`, and `xlink:href`,
    check an interpolated value at run time. A relative URL, or one whose scheme is `http`, `https`,
    `mailto`, or `tel`, is kept. Any other scheme, `javascript:` and `data:` among them, is replaced
@@ -225,9 +247,11 @@ Passing data to a script goes through an attribute, which is escaped like any ot
 
 ### Raw HTML
 
-`Html.raw(s)` returns `s` as markup, unescaped. It is the one way to make `Html` from a string, so a
-review for injection is a search for `Html.raw`. Its use is markup a program trusts: the output of a
-sanitizer, a Markdown renderer, a cached page, an SVG file shipped with the program.
+`Html.raw(s)` returns a raw node holding `s` as markup, which the string renderer writes unescaped
+and a DOM renderer hands to the browser's HTML parser. It is the one way to make markup from a
+string, so a review for injection is a search for `Html.raw`. Its use is markup a program trusts:
+the output of a sanitizer, a Markdown renderer, a cached page, an SVG file shipped with the program.
+A raw node is opaque: `Html.raw("<b>x</b>")` renders as `<b>x</b>` does but is not `==` to it.
 
 ```ant
 <article>{Html.raw(Sanitize.html(post.body))}</article>
@@ -240,7 +264,8 @@ There is no constructor: `Html` is not a named primitive type over `string`, bec
 
 `<>...</>` is an `Html` value with no element around it. It holds content like an element and takes
 no attributes. It is how a function returns several siblings, and how a block of markup is passed as
-an argument.
+an argument. A fragment is not a node: an `Html` value is a list of nodes, and inserting one into
+content splices its nodes in.
 
 ```ant
 func head(title: string): Html {
@@ -264,8 +289,10 @@ Inside content, outside `<pre>`, `<textarea>`, `<script>`, and `<style>`:
   count as one run.
 
 This is the browser's own rule, collapsing white space to one space, applied when the expression is
-built, with the indentation of the source dropped at the edges. So the source can be indented to
-match the Ant code around it, and the output carries no indentation. Unlike JSX, a line break
+parsed, with the indentation of the source dropped at the edges. So the source can be indented to
+match the Ant code around it, and the output carries no indentation. Since the text nodes are fixed
+by the parser, the server's markup and a client's DOM hold the same text, and white space cannot be
+what makes the two disagree, the most common hydration mismatch in React. Unlike JSX, a line break
 between a word and a tag stays a space, so `Hello` on one line and `<b>{name}</b>` on the next reads
 `Hello <b>ada</b>`, as it would in an `.html` file.
 
@@ -308,24 +335,35 @@ exported component states its return type, `: Html`, as every exported function 
 
 ## The `Html` type
 
-`Html` is built in, like `Bytes`: a kind of its own, immutable, with the functions of a namespace.
+`Html` is built in, like `Bytes`: a kind of its own, immutable, with the functions of a namespace. A
+value is a list of nodes, and a node is one of three:
+
+- an **element**: a name, its attributes in written order, each a string or boolean, and its
+  children, a list of nodes;
+- a **text** node: a string;
+- a **raw** node: a string of markup from `Html.raw`.
+
+The list is kept in one normal form, so that two values built differently but meaning the same are
+equal: fragments are spliced in, `null` and `void` leave nothing, adjacent text nodes are joined,
+and an empty text node is dropped. `<p>{"a"}{"b"}</p>` and `<p>ab</p>` are one value.
 
 ```
 Html.raw(s: string): Html              // s as markup, unescaped; the one bypass
 ```
 
-| Type   | Kind | `is`   | `==` compares | `String.from`                                                      | In a union |
-| ------ | ---- | ------ | ------------- | ------------------------------------------------------------------ | ---------- |
-| `Html` | html | `Html` | the markup    | the markup at the top level; `Html.raw("<p>…</p>")` in a container | once       |
+| Type   | Kind | `is`   | `==` compares                                | `String.from`                                  | In a union |
+| ------ | ---- | ------ | -------------------------------------------- | ---------------------------------------------- | ---------- |
+| `Html` | html | `Html` | the nodes: kinds, names, attributes, strings | the markup, in a container too; empty: `<></>` | once       |
 
-`String.from(h)` is the markup, so `println(page)` prints it and a template string embeds it:
-`` `<!doctype html>${page}` `` is the response body. That turns the markup back into a `string`,
-which is the right direction: a `string` never becomes `Html` again without `Html.raw`. `len`,
-indexing, and `for` do not take `Html`; it is not text to take apart.
+`String.from(h)` is the string renderer, so `println(page)` prints the markup and a template string
+embeds it: `` `<!doctype html>${page}` `` is the response body. That turns `Html` into a `string`,
+which is the safe direction: a `string` never becomes `Html` again without `Html.raw`. `len`,
+indexing, and `for` do not take `Html`, and no function takes a value apart: the tree is for
+renderers, not for programs to query (see Open questions).
 
-The same expression with the same values gives the same bytes every time, so a test compares a
-component's output with `==` against `Html.raw` of the expected markup, or its `String.from` against
-a string.
+The same expression with the same values gives the same tree, and the same tree the same bytes, in
+every implementation. A test compares a component's output with `==` against an HTML expression,
+`assert(badge(3) == <span class="badge">3</span>)`, or its `String.from` against a string.
 
 ### Serving a page
 
@@ -390,18 +428,22 @@ and `signup` returns only the `<script>`. Both are `Html`, so the checker cannot
 ## Dynamic semantics
 
 `ant run` keeps everything above that does not mention a type. An HTML expression evaluates its
-attributes and content left to right and appends to the markup:
+attributes and content left to right and builds a node:
 
-- literal text and attribute text as written, after the white space rule, which the parser applies;
-- a string escaped, a number through `String.from`, `null` and `void` as nothing, an array element
-  by element, an `Html` as it is;
-- a boolean attribute by its value, and a URL attribute after its scheme check.
+- literal text and attribute text are strings the parser decoded and, for text, collapsed;
+- a string or a number becomes a text node, `null` and `void` nothing, an array its elements in
+  order, an `Html` its nodes;
+- a boolean attribute is kept or left out by its value, and a URL attribute's string is checked when
+  the node is built, so every renderer sees the checked value.
 
 A value of another kind, in content or in an attribute, and an `Html` inside `<title>` or
 `<textarea>`, is a kind panic like the others of section 12. The checker rules these out.
 
-An `Html` value is a string with another kind, so the interpreter builds it with a string builder
-and the JavaScript backend with string concatenation and one escape function; neither needs a tree.
+`String.from` walks the tree: an element as its start tag, its children, and its end tag, none for a
+void element; a text node and an attribute value escaped; a raw node as it is; the children of
+`<script>` and `<style>` unescaped, which is safe because the parser allowed them only literal text.
+The interpreter holds the tree as ordinary immutable values, and the JavaScript backend as plain
+objects with the same renderer, which must produce the same bytes.
 
 ## `ant fmt`
 
@@ -411,19 +453,45 @@ Lines of markup are reindented to the block they are in, which the white space r
 since a run with a line break means the same at any indentation. Text, and everything inside
 `<pre>`, `<textarea>`, `<script>`, and `<style>`, is kept byte for byte.
 
+## Designed for later
+
+Ant will compile to JavaScript, and `Html` is meant to drive a client framework there, with server
+rendering, hydration, and React-style server components (`ui.md`). That proposal is not part of this
+one, but this one must not block it. The rule followed throughout: what the UI proposal may need is
+a compile error now, so it can be allowed later without changing any program that checks today.
+
+| The UI proposal needs                      | What this proposal does                                                                                                      |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| A DOM renderer and a stream renderer       | `Html` is a tree of elements, text, and raw nodes, not markup, and text is never stored escaped                              |
+| Event handlers                             | `on*={...}` is a syntax error; it can later take an Ant function, never a string                                             |
+| Parts that update in place                 | A function in content or an attribute is a compile error; it can later mark a region a renderer calls again                  |
+| List identity                              | `key` is reserved                                                                                                            |
+| Client components inside server output     | Components are ordinary calls returning `Html`, so a call to a client component can return a reference node of a fourth kind |
+| A tree that crosses from server to client  | Every node holds only strings, booleans, and nodes, which serialize as they are                                              |
+| The same first render on server and client | Text and white space are fixed by the parser; rendering is deterministic                                                     |
+| A raw node in the DOM                      | Raw markup is its own node, which a DOM renderer gives to the browser's parser                                               |
+
+The string renderer stays the one the language defines. The others belong to the JavaScript backend
+and the UI library, and they read the same value.
+
 ## Considered and rejected
 
+- **`Html` as a markup string.** The first draft of this proposal. It is enough for a server
+  response and nothing else: a DOM renderer would parse the string again, it cannot hold an event
+  handler or a client component, and it cannot be streamed with parts left as references.
+- **A tree that programs can query and transform**, as Scala's XML literals offered. It ties every
+  renderer to one public data model and invites code that inspects markup. The tree stays opaque
+  until a renderer written in Ant needs it (see Open questions).
 - **Component tags**, `<Card title="x">…</Card>` calling `Card(title: "x", children: …)`. JSX tells
   a component from an element by its first letter. In Ant case means nothing (section 2), functions
   are named in lower case, and an element name cannot be resolved without the checker. An ordinary
-  call costs a few characters and needs no rule.
+  call costs a few characters and needs no rule. React needs a component element for hooks to know
+  which component they belong to; whether Ant's UI needs one is the UI proposal's question.
 - **`Html` as `type Html = string`.** The constructor would be the raw bypass, and every `string(h)`
   would expose markup as a string that looks like text.
 - **Contextual autoescaping** in scripts, styles, and event handlers, as Go does. It needs a
   JavaScript and CSS lexer in the language and still has edge cases a decade on. Forbidding the
   contexts costs one `data-` attribute.
-- **A node tree** with element, attribute, and text values, to transform or diff. Server rendering
-  needs markup. A tree can be a library later; the syntax would not change.
 - **Builder functions or a tagged template** as the only form. The first is too verbose to compete
   with template strings, and the second hides the markup from the parser.
 - **Rendering every value with `String.from`**, as a template string does. Records and booleans on a
@@ -444,14 +512,14 @@ None until accepted. The changes would be:
 | §12, Expressions and Runtime panics   | The evaluation rule; rows for a bad kind in content or an attribute, and `Html` in `<title>` or `<textarea>`         |
 | `spec/fmt.md`                         | A section 4.10 on HTML expressions                                                                                   |
 
-The fixed lists, void elements, raw text elements, URL attributes, and URL schemes, follow the
-WHATWG HTML standard, and the spec names them in one place so that a later version of HTML is one
-edit.
+The fixed lists, void elements, raw text elements, URL attributes, URL schemes, and named character
+references, follow the WHATWG HTML standard, and the spec names them in one place so that a later
+version of HTML is one edit.
 
 ## Non-goals
 
-- **Client-side rendering**: a DOM, events, state, or hydration. The JavaScript backend gets the
-  same strings; a client framework is a separate design.
+- **Client-side rendering**: a DOM renderer, events, state, hydration, server components, and server
+  functions. They are the UI proposal's; this one only keeps the way open (see Designed for later).
 - **Validating HTML**: content models, such as a `<div>` inside a `<p>`, and known element or
   attribute names. HTML changes, and the browser is the judge.
 - **Template files** read at run time. Templates are Ant code and are checked like it.
@@ -488,5 +556,9 @@ edit.
 - [ ] Attribute names with `@` and a leading `:`, for Alpine.js and Vue: allow, or leave to literal
       `Html.raw`?
 - [ ] `Html.raw` or a louder name, `Html.unsafe` or `Html.trusted`?
-- [ ] Should text check that every `&` begins a valid character reference? HTML tolerates a bare
-      `&`, so the check would catch typos only.
+- [ ] Should `Html` be taken apart by a library, `Html.nodes(h): Array[Html.Node]` with a tagged
+      union of the node kinds? A renderer written in Ant needs it; built-in renderers do not. Adding
+      it later changes nothing else.
+- [ ] Is the full WHATWG table of named character references worth carrying, about 2,200 names, or
+      should text accept only numeric references and the five of XML? Source is UTF-8, so `—` can be
+      written as itself.
