@@ -90,7 +90,11 @@ The sketch leans to signals. Server components work with either.
 - [ ] Structure the browser repairs. Hydration walks the DOM the browser built from the server's
       markup, and that DOM differs from the `Html` tree where the parser repairs it: a `<tbody>`
       inserted into a table, a `<p>` closed before a block element, nested `<a>` or `<form>` split.
-      Ant does not validate HTML (decided in `html.md`), so the hydrator tolerates them.
+      Ant does not validate HTML (decided in `html.md`), so this proposal must say what hydration
+      does there: tolerate the repair, report it, or render that subtree on the client.
 - [ ] Hydration markers in the string renderer's output, or a format that needs none.
+- [ ] How a DOM renderer treats a raw node and `<noscript>`.
+- [ ] Whether a function in the tree changes `==` and map keys for `Html`, or UI values are a type
+      of their own.
 - [ ] Whether the DOM renderer is written in Ant, which needs `Html` to be readable by a library, or
       is part of the JavaScript backend.
