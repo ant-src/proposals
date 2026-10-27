@@ -2,8 +2,8 @@
 
 2026-10-27 · Anton
 
-Status: sketch, for later discussion. It records the research done while designing `html.md` and the
-decisions a full proposal must make. Nothing here is designed yet.
+Status: sketch, for later discussion. It records the research done while designing HTML expressions
+and the decisions a full proposal must make. Nothing here is designed yet.
 
 ## Goal
 
@@ -16,8 +16,8 @@ also:
    and send their output to the browser, with client components inside it left as references that
    the browser runs.
 
-`html.md` keeps the way open for each of these (its section Designed for later). This sketch is what
-comes after it.
+HTML expressions (spec section 5, and `Html` in section 11) keep the way open for each of these.
+This sketch is what comes after it.
 
 ## Prior art
 
@@ -29,7 +29,7 @@ comes after it.
 | Svelte 5                | Compiler; runes (`$state`) are signals                                                         | Same model as Solid, with compiler syntax Ant would avoid                                           |
 | Qwik                    | Resumes the server's state instead of hydrating                                                | Avoids re-running components on load; heavy serialization of closures                               |
 | Astro, Fresh            | Islands: static HTML with interactive components hydrated alone                                | Close to server components with client references, without a stream                                 |
-| Phoenix LiveView, htmx  | State on the server; the browser receives HTML over a socket or per request                    | Needs no JavaScript backend at all; `html.md` already serves htmx                                   |
+| Phoenix LiveView, htmx  | State on the server; the browser receives HTML over a socket or per request                    | Needs no JavaScript backend at all; HTML expressions already serve htmx                             |
 
 ## The decision: how the client updates
 
@@ -64,7 +64,7 @@ The sketch leans to signals. Server components work with either.
   would need a declaration at the top of a module, since it has no directives; or the mark goes on
   the import. Open.
 - **Client components in server code.** The server build binds an imported client component to a
-  function that returns a reference node, the fourth node kind `html.md` leaves room for, holding
+  function that returns a reference node, the fourth node kind `Html.Node` leaves room for, holding
   the module, the name, and the arguments. Rendering it to a string on the server renders the
   component there, as React's server rendering does. To the caller it is a call that returns `Html`
   either way.
@@ -90,8 +90,8 @@ The sketch leans to signals. Server components work with either.
 - [ ] Structure the browser repairs. Hydration walks the DOM the browser built from the server's
       markup, and that DOM differs from the `Html` tree where the parser repairs it: a `<tbody>`
       inserted into a table, a `<p>` closed before a block element, nested `<a>` or `<form>` split.
-      Ant does not validate HTML (decided in `html.md`), so this proposal must say what hydration
-      does there: tolerate the repair, report it, or render that subtree on the client.
+      Ant does not validate HTML (spec section 5), so this proposal must say what hydration does
+      there: tolerate the repair, report it, or render that subtree on the client.
 - [ ] Hydration markers in the string renderer's output, or a format that needs none.
 - [ ] How a DOM renderer treats a raw node and `<noscript>`.
 - [ ] Whether a function in the tree changes `==` and map keys for `Html`, or UI values are a type
