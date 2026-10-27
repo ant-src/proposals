@@ -7,8 +7,8 @@
 A field of a record type may declare a default, `workers: int = 4`, and a record literal may leave
 out any field that has one. A field without a default must still be listed, and an unknown field is
 still an error. The default is an expression evaluated each time a literal leaves its field out, in
-the scope of the module that declares the type, as a parameter default is evaluated each time a call
-leaves its parameter out (section 6). There are no implicit zero values: `ant run` keeps no field
+the scope where the type is declared, as a parameter default is evaluated each time a call leaves
+its parameter out (section 12, Call). There are no implicit zero values: `ant run` keeps no field
 types, and many types have no zero. A default belongs to literals only; it changes nothing about the
 type, its values, assignability or `==`.
 
@@ -111,9 +111,9 @@ used as an annotation, `{ port: int = 80 }`, a default is a syntax error: it wou
 declaration of anything a literal can name. The same holds for a record type nested inside another
 type, such as the element type of an `Array`.
 
-`ant fmt` spaces `=` as it does in a parameter default, one space on each side, and keeps defaults
-where they are written. `ant doc` prints a type through its whole definition (doc.md, section 1), so
-the defaults are part of the signature a reader sees.
+Neither tool changes. `ant fmt` already puts one space on each side of every `=` (fmt.md, the
+spacing table). `ant doc` prints a type through its whole definition (doc.md, section 1), so the
+defaults are part of the signature a reader sees.
 
 ## Semantics
 
@@ -126,18 +126,20 @@ the defaults are part of the signature a reader sees.
    never evaluates its default. Each evaluation is fresh, so `tags: Array[string] = []` gives each
    record its own array. Fresh evaluation is not a copy: `tags: Array[string] = sharedTags` reads
    the variable each time and shares the one array it holds, as a parameter default would.
-3. **Scope.** A default is evaluated in the top-level scope of the module that declares the type, as
-   a function body declared there would see it: the module's top-level names, its imports and the
-   prelude. It does not see the literal's scope, so a literal in another module that builds
-   `Geometry.Config{}` evaluates `Geometry`'s defaults, which may use names `Geometry` does not
-   export. It does not see the other fields of the record either: a default that depends on another
-   field is a function on the type, `Server.new`, as before.
-4. **Local types.** A default of a type declared in a block may not mention a name bound in an
-   enclosing block or function, including a parameter. It is a syntax error, reported by the
-   resolver, so that `ant run` never evaluates the default against a top-level name the local one
-   shadowed. The reason is the one that keeps a local type's body from naming a type parameter of
-   its function (section 4, Type declarations): a local type has one tag for the whole run, made
-   once, so its default cannot close over the variables of one run of the block.
+3. **Scope.** A default sees what its type's body sees, plus the values of the declaring module: the
+   module's top-level names, its imports, the prelude, and the types visible where the type is
+   declared, local types of enclosing blocks included, since each of those is one tag for the whole
+   run (section 12, Names and scopes). It does not see the literal's scope, so a literal in another
+   module that builds `Geometry.Config{}` evaluates `Geometry`'s defaults, which may use names
+   `Geometry` does not export. It does not see the other fields of the record.
+4. **What a default may not do.** A default of a local type may not name a `var`, a function bound
+   with `var`, or a parameter of an enclosing block or function: the type has one tag for the whole
+   run, so its default cannot close over the variables of one run of the block. A default lies
+   outside every boundary (section 5, `return`, `break`, `continue`), as a library's top-level
+   initializer does, so `return`, `try`, `break` and `continue` in it, outside a lambda, have
+   nothing to leave. All of these are syntax errors, found by the parser and resolver, so `ant run`
+   rejects them too and never evaluates a default against a top-level name that a local one
+   shadowed.
 5. **Types.** The checker checks each default against its field's declared type, with that type as
    the expected type, so `[]`, `Map{}` and `null` need no annotation. In a generic record, the type
    parameters are rigid while checking the default, as in a generic function's body: in
@@ -150,9 +152,16 @@ the defaults are part of the signature a reader sees.
    `Server` still has all four fields, so reading `s.workers` needs no narrowing, an anonymous
    record type `{ workers: int }` still accepts a `Server`, and `==`, `String.from`,
    `Json.stringify` and destructuring see every field as before.
-8. **Unchecked runs.** Rules 1 to 3 are run-time rules. The tag keeps, beside the field names, the
-   default expression of each field that has one, so `ant run` fills in omitted fields without any
-   field type. A literal that leaves out a field with no default still panics.
+8. **Unchecked runs.** Rules 1 to 3 also hold at run time. The tag keeps, beside the field names,
+   the default expression of each field that has one, so `ant run` fills in omitted fields without
+   any field type. A literal that leaves out a field with no default still panics.
+9. **Failures.** A default runs at the literal, so a failure in it shows there. A default that reads
+   a top-level `var` of its module before that `var`'s initializer has run panics, as a function
+   that reads it would (section 10): in the module below, `var early = Config{ host: "x" }` placed
+   above `var defaultPort` panics at the literal. A default that builds its own type,
+   `type Node = { next: Node | null = Node{} }`, recurses; evaluating a default counts as a call, so
+   it panics when the goroutine's call depth exceeds the runtime's limit, as unbounded recursion
+   does (section 12, Runtime panics).
 
 ```ant
 // config.ant
@@ -166,16 +175,18 @@ export type Config = {
 }
 
 // main.ant
-import "./config.ant" Config
+import "./config.ant" { Config }
 
-var c = Config.Config{ host: "example.com" }            // port: 8080, read from config.ant's scope
-var d = Config.Config{ ...c, retries: 5 }               // every field from c; no default runs
-c.headers["accept"] = "text/html"                       // d.headers is the same map as c.headers
-var e = Config.Config{ host: "example.com" }            // e.headers is a new, empty map
+var c = Config{ host: "example.com" }            // port: 8080, read from config.ant's scope
+var d = Config{ ...c, retries: 5 }               // every field from c; no default runs
+c.headers["accept"] = "text/html"                // d.headers is the same map as c.headers
+var e = Config{ host: "example.com" }            // e.headers is a new, empty map
 ```
 
-An enumeration of empty records gains nothing, and a record whose fields all have defaults can be
-built with an empty literal, `Config{}`, which reads as "the defaults".
+A record whose fields all have defaults can be built with an empty literal, `Config{}`, which reads
+as "the defaults". A spread now converts to a type with more fields when the extra ones have
+defaults: `Point3{ ...p }` fills `z` from `z: float64 = 0.0`, so widening a record no longer breaks
+the conversions either.
 
 ## When to use a default
 
@@ -206,9 +217,10 @@ someone decides.
   list every field, so a caller who wants to hear about a new defaulted field gets a compile error.
   But it adds syntax to routine construction, Ant's calls have no such marker for omitted arguments,
   and `...` already means a spread in a literal, so the two spellings would sit one dot apart.
-- **Defaults that read other fields.** `end: int = start + 10`. It needs an order among fields and a
-  rule for a field that reads one given later. A function on the type says the same thing with no
-  new rules.
+- **Defaults that read other fields.** `end: int = start + 10`. A parameter default may read earlier
+  parameters, but a record's fields are not a scope, and fields whose values depend on each other
+  are the coupled fields of "When to use a default": a caller who sets `end` alone can still break
+  `start <= end`. A function on the type checks them together, with no new rules.
 - **Constant-only defaults.** Ant has no constant evaluation, and a constant rule would differ from
   parameter defaults for no gain.
 - **A lint or flag that requires every field.** An author who wants every caller to choose a value
@@ -224,15 +236,17 @@ someone decides.
   its named type that has no default, and may give the others; an entry for a field the type does
   not list is a compile error, which catches typos." The paragraph on what the interpreter keeps
   adds the defaults. Add rules 2, 3 and 5 to 7.
-- **Section 4, Type declarations.** Add rule 4 beside the rule on type parameters in a local type.
+- **Section 4, Type declarations.** Add rule 4 for local types.
+- **Section 5, `return`, `break`, `continue`.** A record default is, like a library's top-level
+  initializer, outside every boundary.
 - **Section 4, Inference.** Add rule 6.
 - **Section 12, Expressions, record literal.** "Every name the tag lists must have received a value"
   becomes "then every field the tag lists that has received no value takes its default, evaluated in
-  declaration order in the declaring module's top-level scope; a field without a default must have
-  received a value."
+  declaration order in the scope of rule 3; a field without a default must have received a value."
+  Rule 9's call-depth sentence goes with it.
+- **Section 12, Values.** The tag row adds "and the default expression of each field that has one".
 - **Section 12, Runtime panics.** The record literal row reads "a field the tag lists is left
   without a value and has no default".
-- **fmt.md.** Spacing of `=` in a record field, as in a parameter.
 - **`ant/TODO.md`.** Drop "Default values for records". Flags keeps its open question: defaults give
   a checked record of flag values a declaration, but filling it from `Os.args()` still needs a way
   to iterate a record's fields.
@@ -248,11 +262,5 @@ someone decides.
 
 ## Open questions
 
-- Whether a caller needs a way to demand an exhaustive literal after all, through the marker
-  rejected above or something else. Revisit if programs show a real need.
-
-- Whether a default may read the fields given before it in declaration order, as a parameter default
-  may read earlier parameters (section 12, Call). Rejected above for simplicity; it would let
-  `end: int = start + 10` work without a function, at the cost of an order rule.
-- Whether `ant doc` should print a type's defaults when a long default makes the signature hard to
-  read, or elide them as `= ...`.
+None at this draft. The exhaustive-literal marker and defaults that read other fields are rejected
+above; either can be reopened if programs show a need.
