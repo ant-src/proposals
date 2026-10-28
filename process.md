@@ -1,6 +1,19 @@
 # Proposal: running programs
 
-2026-10-27 · Anton
+2026-10-27 · Anton · Accepted, and written into `spec/stdlib.md` with the changes in Decisions
+
+## Decisions
+
+Implementing it changed three things; the spec has the result.
+
+- **`Os.exec` and `Os.output` take no handle as `stdin`.** `string | Bytes | File.Handle` is not a
+  valid union: `is` tests neither `Bytes` nor `File.Handle` (`ant-lang.md` §4, Unions), so a union
+  holds at most one of them. `stdin` stays `string | Bytes`; a handle as input goes through
+  `Os.start(..., stdin: h)`.
+- **An interrupt that ends the run kills `Os.start` children too**, not only the host's
+  cancellation: both end the run before the script does.
+- **A child started with a context is killed when the run ends**, whatever way, since a context ends
+  with its run (`ant-lang.md` §9). A child started without one is left running when the script ends.
 
 ## Summary
 
