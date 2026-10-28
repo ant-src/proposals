@@ -10,6 +10,7 @@ touches. Nothing here is part of the language until it is accepted and written i
 | [ui.md](ui.md)             | A client framework and server components on `Html`                  | Sketch   |
 | [parallel.md](parallel.md) | `Parallel.map`, `each`, `run` and `race`: bounded, joined fan-out   | Draft    |
 | [process.md](process.md)   | `Os.run`, `output`, `start`, `wait`, `openPipe`: running programs   | Accepted |
+| [cmd.md](cmd.md)           | `Cmd` values, explicit verbs, and `Cmd.pipe` pipelines              | Draft    |
 
 ## Process
 
