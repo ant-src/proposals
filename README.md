@@ -9,7 +9,7 @@ touches. Nothing here is part of the language until it is accepted and written i
 | [assert.md](assert.md)       | `assert(cond, message?)`: always on, shows compared values, narrows | Draft  |
 | [ui.md](ui.md)               | A client framework and server components on `Html`                  | Sketch |
 | [parallel.md](parallel.md)   | `Parallel.map`, `each`, `run` and `race`: bounded, joined fan-out   | Draft  |
-| [debugging.md](debugging.md) | `ant dap`: a DAP debugger for VS Code, IntelliJ and other editors   | Draft  |
+| [debugging.md](debugging.md) | `ant dap`: a DAP debugger for VS Code, IntelliJ and other editors   | Accepted |
 
 ## Process
 
