@@ -50,8 +50,8 @@ The adapter and the program share one process: `launch` loads the program as `an
 runs it on the interpreter with the debugger attached. The program's standard output and standard
 error become `output` events, because the real standard output carries the protocol. The adapter
 never hands the run its own streams: standard output and standard error are writers that are not
-files, and standard input is none (Open questions). A child that `Cmd.run` starts is given those
-writers and the null device in turn, so it cannot read or write the protocol either.
+files, and standard input is the `stdin` file or none (Launch). A child that `Cmd.run` starts is
+given the same, so it cannot read or write the protocol either.
 
 The interpreter buffers standard output. The adapter flushes it at every stop, at every line break
 and at least every 100 milliseconds, so what a program printed just before a breakpoint is shown
@@ -65,6 +65,7 @@ when it stops there.
 | `args`        | the program's arguments (`Os.args`)                              | `[]`               |
 | `cwd`         | the working directory                                            | the program's dir  |
 | `env`         | environment variables added to the adapter's own                 | `{}`               |
+| `stdin`       | a file whose contents are the program's standard input           | none: end of file  |
 | `stopOnEntry` | stop before the first statement of the program's root module     | `false`            |
 
 A program that fails to load (a syntax error, a missing import) ends the session with the error in
@@ -90,6 +91,20 @@ body of a function, a lambda, a `go` block, a `defer` block, a `for` body and an
 branch. A breakpoint on a line binds to the first statement that starts on that line. If no
 statement starts there, it moves to the next line that has one, in the same body. A line past the
 end of every body stays unverified.
+
+A pipeline of two or more stages also stops before each stage: once its left side has been
+evaluated, and before the stage's call. The value flowing in is shown as the pseudo-variable
+`(piped)` at the top of Locals. So step over walks a long pipeline one stage at a time, and a
+breakpoint on a line that starts with `|` binds to that stage.
+
+```ant
+var total = orders                     // stop: the statement
+  | Array.filter({ x.paid })           // stop: (piped) is orders
+  | Array.map({ x.amount })            // stop: (piped) is the paid orders
+  | Array.sum()                        // stop: (piped) is the amounts
+```
+
+A single-stage pipe, `xs | Array.sum()`, has no stage stop of its own; the statement's is enough.
 
 A statement with a lambda in it, such as `xs | Array.map({ x * 2 })`, has stop points inside the
 lambda's body. Step over goes past them; step in stops at the first one.
@@ -158,7 +173,8 @@ belongs to the frame that registered it, so step over at the end of a block stop
 blocks.
 
 With "just my code" on (the default), step in does not stop in the prelude, and step out of a
-prelude frame stops in the first caller outside it.
+prelude frame stops in the first caller outside it. Only the prelude is skipped: an imported module
+is the program's own code wherever it lives.
 
 ### Break on panic
 
@@ -211,8 +227,9 @@ Not part of the contract, listed to size the work. The interpreter stays a tree 
 debugger attached, each check costs one predictable branch. The slot-name tables and the larger
 frames cost memory in every run.
 
-- **Statement hook.** `evalStmts` calls the debugger before each statement when one is attached. All
-  stop logic (breakpoints, steps, pause) is behind it.
+- **Statement hook.** `evalStmts` calls the debugger before each statement when one is attached,
+  and a pipe `Call` before each stage of a pipeline of two or more. All stop logic (breakpoints,
+  steps, pause) is behind it.
 - **Slot names.** The resolver records, for each slot of a `BlockScope`, its name and declaration
   position. Today a scope keeps only slot counts, so locals cannot be named.
 - **Frames with state.** A `Frame` gains its `Env` and its current position. Today it keeps the call
@@ -271,12 +288,11 @@ documented, the client can move to it without changing `ant dap`.
 - **Paused clocks.** Time, timers and deadlines keep running while the program is stopped (see
   Threads).
 
-## Open questions
+## Decisions
 
-1. **Standard input.** In-process launch gives the program an empty `Os.stdin()`. A program that
-   reads input needs a terminal: `runInTerminal` would start a separate `ant run` that connects back
-   to the adapter, which is half of attach. Ship phase 1 without it?
-2. **Step granularity.** Statements only, or also stop points at each call in a long pipeline
-   (`xs | Array.filter(...) | Array.map(...)`) on one line?
-3. **Library frames.** Should "just my code" also skip imported modules outside the workspace, or
-   only the prelude?
+- **Standard input** is a file named by the `stdin` launch attribute, or empty. No terminal, no
+  `runInTerminal`: a program that needs live input is run with `ant run`.
+- **Pipelines** stop before each stage, so a long pipeline steps one stage at a time.
+- **"Just my code"** skips only the prelude, not imported modules outside the workspace.
+- **Hover** evaluates only names and field paths, never calls.
+- **The IntelliJ client** uses `lsp4j.debug`.
