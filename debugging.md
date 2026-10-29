@@ -32,7 +32,7 @@ ant dap                     serve the debug protocol on standard input and stand
   All-stop: when one goroutine stops, all do; goroutines are DAP threads. Ant follows it on
   both points.
 - **debugpy** and **js-debug** run in-process or next to the runtime and add a "just my code"
-  filter that skips library frames. Ant's prelude is library code in this sense.
+  filter that skips library frames. Ant needs none: its prelude is written in Go and has no frames.
 - **Lua and Ruby debuggers** (`local-lua-debugger`, `debug.gem`) hook a tree or bytecode
   interpreter at each line or statement, the approach proposed here.
 - **JetBrains.** CLion 2025.3 added DAP debug profiles, but only in CLion. The platform has an
@@ -132,9 +132,8 @@ the timeout while debugging (Non-goals, Paused clocks).
 
 A thread's frames are the frames of its panic trace (section 8, `panic`): one per function or lambda
 call and one per module body running, with the same names. Each frame carries the position of the
-statement it is at, or of the call it is in. A builtin written in Go appears as a frame with no
-source. A function from the prelude has a source the client fetches by `sourceReference`, and is
-marked `deemphasize`.
+statement it is at, or of the call it is in. The prelude is written in Go, so a prelude call
+has no frame: a lambda that `Array.map` calls sits directly above the frame that called `Array.map`.
 
 ### Scopes and variables
 
@@ -171,10 +170,6 @@ goroutine (section 12, `for x in e`), so this is always one thread's stack. So s
 stops in the body, and step over at the end of the body goes to its next iteration. A `defer` block
 belongs to the frame that registered it, so step over at the end of a block stops in its deferred
 blocks.
-
-With "just my code" on (the default), step in does not stop in the prelude, and step out of a
-prelude frame stops in the first caller outside it. Only the prelude is skipped: an imported module
-is the program's own code wherever it lives.
 
 ### Break on panic
 
@@ -293,6 +288,7 @@ documented, the client can move to it without changing `ant dap`.
 - **Standard input** is a file named by the `stdin` launch attribute, or empty. No terminal, no
   `runInTerminal`: a program that needs live input is run with `ant run`.
 - **Pipelines** stop before each stage, so a long pipeline steps one stage at a time.
-- **"Just my code"** skips only the prelude, not imported modules outside the workspace.
+- **No "just my code".** The prelude is Go, so it has no frames to skip, and imported modules are
+  the program's own code wherever they live.
 - **Hover** evaluates only names and field paths, never calls.
 - **The IntelliJ client** uses `lsp4j.debug`.
