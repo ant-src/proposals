@@ -1,30 +1,27 @@
-# Proposal: one string syntax, raw lines
+# Proposal: one interpolating string, Go raw strings
 
 2026-10-27 · Anton
 
 ## Summary
 
-`"..."` becomes the only quoted string: escapes, `${expr}` interpolation, and line breaks. Backtick
-template strings go away. A backtick instead starts a raw line, as Zig's `\\` does: the rest of the
-source line is text, with no escapes and no interpolation. Consecutive raw lines join with `\n`.
-Spaces and tabs before each backtick are ignored. Single quotes stay unused.
+`"..."` becomes the only interpolating string: escapes, `${expr}` interpolation, and line breaks.
+Backtick template strings go away. A backtick string becomes a raw string, as in Go: the text
+between the backticks is kept as written, with no escapes and no interpolation, and may span lines.
+Single quotes stay unused.
 
 ```ant
 var greeting = "hello, ${name}"
 
-var query =
-  `SELECT id, name
-  `FROM users
-  `WHERE email LIKE '%@example.com'
+var query = `SELECT id, name
+FROM users
+WHERE email LIKE '%@example.com'`
 ```
 
 ## Motivation
 
 - Plain and template strings do one job. Adding `${x}` to a string should not mean changing quotes.
-- Multi-line templates keep every byte, so their indentation leaks into the value and `ant fmt`
-  cannot reindent them.
 - Ant has no raw strings, so regexes, Windows paths, shell and JSON need `\\` and `\"`.
-- A raw line ends at the end of the line, so it never needs an escape or a longer delimiter.
+- Go's raw string is familiar, delimited on both sides, and fits inline in calls: ``f(`a`, b)``.
 
 ## Rules
 
@@ -36,25 +33,19 @@ var query =
 - A line break inside the quotes is one `\n` in the value, whatever the file uses. Indentation is
   kept as written.
 
-**Raw lines**
+**`` `...` ``**
 
-- A raw string starts anywhere a literal may: ``var s = `abc``.
-- A following line whose first non-blank character is a backtick continues it, adding `\n`. A blank
-  line, a comment, or any other token ends it.
-- Text after the backtick is kept exactly, trailing spaces included. A lone `` ` `` is `""`; an empty
-  last line adds a trailing `\n`.
-- The string ends its line, so the next token goes on the next line. Inside `(`, `[` and `{` that
-  already works; a leading `.`, `?.` or `|` continues the expression as usual.
+- Everything between the backticks is the value: `\`, `"`, `$` and `${` have no meaning.
+- A raw string may span lines. Line breaks are `\n` (carriage returns are dropped, as in Go), and
+  indentation is kept as written.
+- A raw string cannot contain a backtick. Text with one is `"..."` or raw strings joined with `+`.
 
 ```ant
-var origin = Regex.compile(
-  `^https?://[^/"]+/
-)
+var origin = Regex.compile(`^https?://[^/"]+/`)
 
-var script =
-  `#!/bin/sh
-  `echo "deploying ${APP}"
-  `
+var script = `#!/bin/sh
+echo "deploying ${APP}"
+`
 ```
 
 `script` keeps `${APP}` for the shell and ends with `\n`.
@@ -63,47 +54,45 @@ var script =
 
 | Source                                   | Result                                                   |
 | ---------------------------------------- | -------------------------------------------------------- |
-| blank or comment line between raw lines  | two strings; the discarded second one is a syntax error  |
-| `` `abc` `` (JS, Go, old Ant habit)      | syntax error: one-line raw text may not end in `` ` ``   |
-| ``f(`a`, b)`` on one line                | the raw text is ``a`, b)``; error notes raw runs to EOL  |
+| `` `C:\temp\new` ``                      | backslashes kept: `C:\temp\new`                          |
+| `` `a ${x} b` `` (old template habit)    | text `a ${x} b`; no interpolation                        |
 | `"${"}"}"`                               | `"}"`: strings nest inside interpolation                 |
-| `"${2}@$1"` for `Regex.replace`          | now interpolates; write `"\${2}@$1"` or a raw line       |
+| `"${2}@$1"` for `Regex.replace`          | now interpolates; write `"\${2}@$1"` or `` `${2}@$1` ``  |
 | `name="${x}"` in HTML markup             | unchanged: attribute quotes are markup, not Ant strings  |
+| unterminated `` ` ``                     | syntax error at the opening backtick                     |
 | CRLF source file                         | both forms produce `\n` only                             |
-
-The discarded-statement rule is the one HTML expressions already have (section 5).
 
 ## `ant fmt`
 
-Raw lines are reindented like code: backticks at the statement's indentation, or one level deeper
-when the string starts after other tokens. Text after the backtick and text inside `"..."` are kept
-byte for byte. fmt never converts between the two forms.
+Text inside `"..."` and `` `...` `` is kept byte for byte. fmt never converts between the two forms
+and never reindents the continuation lines of a multi-line string.
 
 ## Trade-offs
 
-- Every raw line carries a backtick; pasted text needs column editing. In return the formatter owns
-  indentation and nothing is ever escaped.
-- No interpolation in raw text: indented text with values is `"..."` with indentation as written, or
-  raw lines joined with `+`. This is the weakest case.
+- Multi-line raw strings carry their indentation into the value, so they sit at column 0 or the
+  value gets leading spaces. Go has the same cost.
+- No interpolation in raw text: indented text with values is `"..."` with indentation as written,
+  or raw strings joined with `+`.
+- No backtick inside a raw string. Markdown code spans and shell command substitution need `"..."`.
 - `${` gains meaning in `"..."`, which breaks the regex replacement strings in the corpus.
-- JS and Go readers expect `` `...` `` to be delimited; the two diagnostics above exist for that.
+- Old template strings still parse, as raw strings, so a missed migration gives literal `${x}`
+  text instead of an error.
 
 ## Spec changes
 
-- **ant-lang.md §2 Literals:** new examples, escapes paragraph, raw string rules and diagnostics;
-  remove "There are no raw strings".
-- **§2 Line endings:** line breaks in `"..."` are `\n`; raw continuation onto backtick lines.
-- **§5:** discarded raw string is a syntax error; HTML `{expr}` text refers to `${...}` of strings.
+- **ant-lang.md §2 Literals:** new examples, escapes paragraph, raw string rules; remove "There are
+  no raw strings".
+- **§2 Line endings:** line breaks in both forms are `\n`.
+- **§5:** HTML `{expr}` text refers to `${...}` of strings.
 - **§11 String, Regex; §12 Literals; stdlib.md Time:** "template string" becomes string
   interpolation; rewrite the `"$1"` note.
-- **fmt.md 3, 4.1, 4.9, 4.10:** 4.9 becomes Strings with raw line indentation; drop the CRLF
-  exception for strings.
+- **fmt.md 3, 4.1, 4.9, 4.10:** 4.9 becomes Strings; drop the CRLF exception for strings.
 
 Migration: Ant is unreleased, so a script rewrites the ~100 corpus files with templates in one step
-(`"` → `\"`, `` \` `` → `` ` ``) and adds `\$` to plain strings that contain `${`.
+(backtick → `"`, `"` → `\"`, `` \` `` → `` ` ``) and adds `\$` to plain strings that contain `${`.
 
 ## Open questions
 
-1. Add interpolating raw lines with a second marker, such as `` $` ``? Recommended: not yet.
-2. Strip indentation from multi-line `"..."` as Swift does? Recommended: no; raw lines cover it.
-3. Is the one-line trailing-backtick error worth losing raw text that ends in `` ` ``?
+1. Add interpolating raw strings with a prefix, such as `` $`...` ``? Recommended: not yet.
+2. Strip common indentation from multi-line strings as Swift does? Recommended: no; keep Go's rule.
+3. Should a raw string whose text contains `${` warn, to catch missed template migrations?
