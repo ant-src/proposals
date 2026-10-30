@@ -1,6 +1,6 @@
 # Proposal: one interpolating string, Go raw strings
 
-2026-10-27 · Anton
+2026-10-27 · Anton · Accepted
 
 ## Summary
 
@@ -91,8 +91,14 @@ and never reindents the continuation lines of a multi-line string.
 Migration: Ant is unreleased, so a script rewrites the ~100 corpus files with templates in one step
 (backtick → `"`, `"` → `\"`, `` \` `` → `` ` ``) and adds `\$` to plain strings that contain `${`.
 
-## Open questions
+## Decisions
 
-1. Add interpolating raw strings with a prefix, such as `` $`...` ``? Recommended: not yet.
-2. Strip common indentation from multi-line strings as Swift does? Recommended: no; keep Go's rule.
-3. Should a raw string whose text contains `${` warn, to catch missed template migrations?
+1. No interpolating raw strings (`` $`...` ``) for now.
+2. Multi-line strings keep their indentation as written, as in Go; nothing is stripped.
+3. A raw string that contains `${` does not warn: shell scripts and regex replacements use it on
+   purpose, and the migration rewrote every template in the corpus.
+4. `${...}` over `{...}`: braces are common in string text (JSON, CSS, code), `$` is rare, and the
+   form is the one JS, Kotlin and shell readers know. Markup keeps `{...}`, as JSX does.
+5. `String.from` writes a `$` before `{` as `\$` inside quotes, so a rendering reads back.
+
+Accepted 2026-10-30: spec 10efa5d, ant 376d736.
