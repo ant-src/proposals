@@ -1,6 +1,6 @@
 # Proposal: `assert`
 
-2026-10-26 · Anton
+2026-10-26 · Anton · Accepted, in spec 50ec384 + 9e8b2ee and ant 9e65a9e
 
 ## Summary
 
@@ -102,8 +102,8 @@ assert(cond: bool, message: string = ""): void   // panics if cond is false; mes
    prints it on one line, then the values of rule 3 when there are any, then `: ` and `message` when
    it is not empty. Comments and line breaks in the source do not appear.
 3. **Values.** On failure the report shows the values `cond` was computed from, each rendered in
-   full by `String.from`. They are the values the evaluation already produced; nothing is evaluated
-   a second time.
+   full by `String.from` as inside an array, so a string is quoted. They are the values the
+   evaluation already produced; nothing is evaluated a second time.
    - **The comparison.** When the outermost operator of `cond` is `==`, `!=`, `<`, `<=`, `>`, `>=`
      or `is`, the two values follow the condition in parentheses, so they stand next to the text
      they belong to: `total == expected (9 == 10)`. For `is`, the left value is shown in full and
@@ -113,9 +113,10 @@ assert(cond: bool, message: string = ""): void   // panics if cond is false; mes
      index expression and call inside `cond` that ran, in the order it ran: `assert(isSorted(xs))`
      shows `xs = [3, 1, 2]`. Left out are literals, the callee of a call, the object of a field
      access or index (the access itself is shown), the comparison's two operands (already in
-     parentheses), the whole condition, and the bodies of lambdas. A text that repeats is shown
-     once, with its first value. A part that short-circuiting skipped did not run and is not shown,
-     so `assert(a && b)` shows `a = true` and `b = false`, or only `a = false`.
+     parentheses), the whole condition, the bodies of lambdas, and a part whose value is a function.
+     A text that repeats is shown once, with its first value. A part that short-circuiting skipped
+     did not run and is not shown, so `assert(a && b)` shows `a = true` and `b = false`, or only
+     `a = false`.
 4. **Narrowing.** After `assert(cond)`, the checker applies what `if !cond { panic(...) }` would:
    the complement of the false branch holds for the rest of the block (section 7, Narrowing). So
    `assert(x != null)`, `assert(s is Circle)` and `assert(a != null && b != null)` narrow.
