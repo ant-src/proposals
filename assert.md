@@ -108,7 +108,8 @@ assert(cond: bool, message: string = ""): void   // panics if cond is false; mes
      or `is`, the two values follow the condition in parentheses, so they stand next to the text
      they belong to: `total == expected (9 == 10)`. For `is`, the left value is shown in full and
      the right side is the left value's actual tag. A failed `==` between two structures lists the
-     differences instead (see Comparing structures).
+     differences instead (see Comparing structures). A failed `!=` against the literal `null` names
+     the other side instead, since both values are `null`: `user != null (user is null)`.
    - **The parts.** Below the first line comes one line `text = value` for each name, field access,
      index expression and call inside `cond` that ran, in the order it ran: `assert(isSorted(xs))`
      shows `xs = [3, 1, 2]`. Left out are literals, the callee of a call, the object of a field
@@ -170,7 +171,7 @@ println(shape.radius)                       // shape: Circle here
 var user = find(users, id)
 assert(user != null, "user ${id} seeded above")
 println(user.name)                          // user: User here
-// panic: assertion failed: user != null (null != null): user 7 seeded above
+// panic: assertion failed: user != null (user is null): user 7 seeded above
 ```
 
 ### Comparing structures
