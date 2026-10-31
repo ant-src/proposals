@@ -107,8 +107,7 @@ assert(cond: bool, message: string = ""): void   // panics if cond is false; mes
    - **The comparison.** When the outermost operator of `cond` is `==`, `!=`, `<`, `<=`, `>`, `>=`
      or `is`, the two values follow the condition in parentheses, so they stand next to the text
      they belong to: `total == expected (9 == 10)`. For `is`, the left value is shown in full and
-     the right side is the left value's actual tag. A failed `==` between two structures lists the
-     differences instead (see Comparing structures). A failed `!=` against the literal `null` names
+     the right side is the left value's actual tag. A failed `!=` against the literal `null` names
      the other side instead, since both values are `null`: `user != null (user is null)`.
    - **The parts.** Below the first line comes one line `text = value` for each name, field access,
      index expression and call inside `cond` that ran, in the order it ran: `assert(isSorted(xs))`
@@ -173,64 +172,6 @@ assert(user != null, "user ${id} seeded above")
 println(user.name)                          // user: User here
 // panic: assertion failed: user != null (user is null): user 7 seeded above
 ```
-
-### Comparing structures
-
-When `a == b` fails and both operands are records of one tag, arrays, maps, sets or `Html`, the two
-values are not printed whole. A record of twenty fields renders as a line nobody reads, and the one
-field that differs is somewhere in the middle. The report instead lists where the values differ, one
-line per difference, below the first line:
-
-```ant
-type Address = { city: string, zip: string }
-type User = { id: int, name: string, address: Address, roles: Array[string] }
-
-assert(got == want, "seeded by fixtures")
-```
-
-```
-panic: assertion failed: got == want: seeded by fixtures
-  .name: "Ann" != "Anne"
-  .address.city: "Bern" != "Basel"
-  .roles[2]: missing != "admin"
-  at check (users_test.ant:12:3)
-```
-
-Each line is a path from the operands, then the left value and the right value at that path,
-rendered by `String.from`. The walk is `==` itself (section 12, Equality): it goes into exactly the
-values `==` goes into, compares the rest as `==` does, and counts a pair already under comparison as
-equal, so a cyclic value ends (section 4). A path is written the way Ant code reaches the value:
-
-- **Records of one tag** go field by field in the tag's field order; the path adds `.field`.
-- **Arrays** go index by index; the path adds `[i]`. Past the shorter array, the side without an
-  element shows `missing`.
-- **Maps** go key by key, the left map's keys in its order and then the right map's other keys; the
-  path adds `[key]`, the key rendered by `String.from`. A side without the key shows `missing`.
-- **Sets** have no indexing, so a member that only one side has is shown as `Set.has` answers for
-  it: `.roles has "admin": false != true`.
-- **`Html`** is compared by its nodes, so it is walked as `Html.nodes` reads it: the path adds `[i]`
-  per node and then the node record's fields, `.children`, `.attributes[j]`, `.text`. A raw node is
-  compared by its markup.
-- **Anything else is a leaf**: two values of different kinds or tags, a number, a string, `Bytes`, a
-  tagged primitive, a time value, a pattern, and a reference compared by identity. An unequal leaf
-  is one line. Two references that render alike, `Mutex != Mutex`, add `(not the same value)`. `NaN`
-  is a leaf like any number and shows as `NaN != NaN`.
-
-```
-assert(badge(3) == <b>3</b>)
-// panic: assertion failed: badge(3) == <b>3</b>
-//   [0].children[0].text: "4" != "3"
-```
-
-Equal parts print nothing. The difference lines come after the parts of rule 3, in the order the
-walk meets them, at most ten, then `… and 4 more`. When the operands themselves are leaves, as with
-two records of different tags, rule 3 applies as it stands:
-`(Square{ side: 2 } == Circle{ radius: 1 })`. A failed `!=` means the values are equal, so there is
-nothing to list and rule 3 applies too.
-
-The lines are part of `Panic.message`, joined by line breaks, so a test runner that prints a caught
-panic prints them unchanged. This is pytest's and ExUnit's answer rather than Rust's `assert_eq!`,
-which prints both values in full and leaves the diff to the reader.
 
 The message follows the error convention of section 8: lowercase, no closing punctuation, context
 first. A message names the reason the condition should hold, not the condition again.
@@ -302,7 +243,7 @@ All additions. `panic` and narrowing are unchanged in meaning.
 | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `spec/ant-lang.md` §1, Principles         | None. "`panic` is for bugs" already covers it                                                                                                     |
 | §7, Narrowing                             | Add to the second bullet: `assert(cond)` narrows the rest of the block as `if !cond { panic(...) }` does                                          |
-| §8, new subsection `assert` after `panic` | Semantics rules 1–7, the report format, Comparing structures, and the When to use it table                                                        |
+| §8, new subsection `assert` after `panic` | Semantics rules 1–7, the report format, and the When to use it table                                                                              |
 | §11, Prelude                              | Add the signature, and a paragraph that `assert` is built into the checker and the evaluator and, unlike every other prelude name, is not a value |
 | §11, Html                                 | None. Its example `assert(badge(3) == <b>3</b>)` already calls `assert`, which this proposal adds                                                 |
 | §12, Expressions                          | A call of `assert`: evaluation order, the lazy message, the values recorded for the report                                                        |
@@ -325,7 +266,7 @@ call. The JS backend emits the texts as constants at the call site.
 - **Custom failure handlers.** C++26 and Java let a program replace what a failed check does. A
   program that must survive a bug in one unit of work uses `Panic.catch` at that unit's edge.
 - **Shortening values.** Values print in full by `String.from`. A pretty printer that folds a long
-  value can come later without changing `assert`.
+  value, or a diff that lists where two structures differ, can come later without changing `assert`.
 - **Panic values other than a message.** An assertion's panic is an ordinary `Panic` record. The
   operand values are in its message, not in fields.
 
@@ -333,10 +274,10 @@ call. The JS backend emits the texts as constants at the call site.
 
 Decided after review:
 
-| Question                                         | Decision                                                                      |
-| ------------------------------------------------ | ----------------------------------------------------------------------------- |
-| Truncate long values?                            | No; `String.from` in full for now, a pretty printer later                     |
-| `assert(false)` and `assert(true)` errors?       | No                                                                            |
-| Show variables and calls, not only the operands? | Yes, rule 3's parts, listed one per line                                      |
-| Lazy `message`?                                  | Yes, as the message of `if !cond { panic(message) }`                          |
-| How to walk sets and `Html` in a diff?           | As `==` does: sets by `Set.has`, `Html` by its nodes; ten lines, then a count |
+| Question                                         | Decision                                                  |
+| ------------------------------------------------ | --------------------------------------------------------- |
+| Truncate long values?                            | No; `String.from` in full for now, a pretty printer later |
+| `assert(false)` and `assert(true)` errors?       | No                                                        |
+| Show variables and calls, not only the operands? | Yes, rule 3's parts, listed one per line                  |
+| Lazy `message`?                                  | Yes, as the message of `if !cond { panic(message) }`      |
+| A diff for a failed `==` between structures?     | Not now; both values print in full by `String.from`       |
