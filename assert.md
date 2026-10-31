@@ -5,12 +5,13 @@
 ## Summary
 
 Add `assert(cond, message?)` to the prelude. It panics when `cond` is false, with a message that
-quotes the condition as written and, for a comparison, the two values compared. It narrows like
-`if !cond { panic(...) }`, so `assert(user != null)` leaves `user` a `User` below it. It is always
-on: no flag, build mode or release setting removes it. The message is evaluated only on failure.
-`assert` is built into the checker and the evaluator and, unlike every other prelude name, is not a
-value: its report needs the condition's source text, which only a call site has. No keyword, no new
-syntax, no debug-only variant.
+quotes the condition as written and shows the values it was computed from: the two sides of a
+comparison, and each variable, field and call inside it. It narrows like `if !cond { panic(...) }`,
+so `assert(user != null)` leaves `user` a `User` below it. It is always on: no flag, build mode or
+release setting removes it. The message is evaluated only on failure. `assert` is built into the
+checker and the evaluator and, unlike every other prelude name, is not a value: its report needs the
+condition's source text, which only a call site has. No keyword, no new syntax, no debug-only
+variant.
 
 ## Motivation
 
@@ -69,7 +70,8 @@ What Ant takes:
 - **Show the values.** Rust's `assert_eq!`, pytest's rewriting, Swift Testing's `#expect`, Groovy
   and Kotlin power-assert, ExUnit and Gleam all exist because "assertion failed" alone sends the
   reader to a debugger. Gleam and `#expect` do it without a second name: the one assertion looks at
-  the comparison it was given. Ant can too, since the checker and evaluator see the condition.
+  the comparison it was given. Ant can too, since the checker and evaluator see the condition, and
+  like power-assert it also shows the variables and calls inside it.
 - **Narrow.** TypeScript added `asserts x is T` signatures and Kotlin added contracts because an
   assertion that the checker ignores forces a second, redundant check. Ant's narrowing already
   treats `if !cond { panic(...) }` this way (section 7); `assert` gets the same rule.
@@ -95,17 +97,25 @@ assert(cond: bool, message: string = ""): void   // panics if cond is false; mes
    never evaluated. If it is `false`, `message` is evaluated and the goroutine panics, exactly as
    `panic` does: deferred blocks run, `Panic.catch` can stop it, and an uncaught panic is reported
    with its trace (section 12, Deferred blocks and panics). The innermost frame is the `assert`
-   call.
+   call. The message is lazy exactly as the message of `if !cond { panic(message) }` is.
 2. **The message.** The panic message is `assertion failed: ` followed by the condition as `ant fmt`
    prints it on one line, then the values of rule 3 when there are any, then `: ` and `message` when
    it is not empty. Comments and line breaks in the source do not appear.
-3. **Values of a comparison.** When the outermost operator of `cond` is `==`, `!=`, `<`, `<=`, `>`,
-   `>=` or `is`, each operand is evaluated once, as it would be anyway, and on failure the two
-   values follow the condition in parentheses, rendered by `String.from`, so they stand next to the
-   text they belong to: `total == expected (9 == 10)`. For `is`, the left value is shown in full and
-   the right side is the left value's actual tag. A failed `==` between two structures lists the
-   differences instead (see Comparing structures). Nothing else is decomposed: `assert(a && b)`
-   reports the text only, since short-circuiting means one side may not have run.
+3. **Values.** On failure the report shows the values `cond` was computed from, each rendered in
+   full by `String.from`. They are the values the evaluation already produced; nothing is evaluated
+   a second time.
+   - **The comparison.** When the outermost operator of `cond` is `==`, `!=`, `<`, `<=`, `>`, `>=`
+     or `is`, the two values follow the condition in parentheses, so they stand next to the text
+     they belong to: `total == expected (9 == 10)`. For `is`, the left value is shown in full and
+     the right side is the left value's actual tag. A failed `==` between two structures lists the
+     differences instead (see Comparing structures).
+   - **The parts.** Below the first line comes one line `text = value` for each name, field access,
+     index expression and call inside `cond` that ran, in the order it ran: `assert(isSorted(xs))`
+     shows `xs = [3, 1, 2]`. Left out are literals, the callee of a call, the object of a field
+     access or index (the access itself is shown), the comparison's two operands (already in
+     parentheses), the whole condition, and the bodies of lambdas. A text that repeats is shown
+     once, with its first value. A part that short-circuiting skipped did not run and is not shown,
+     so `assert(a && b)` shows `a = true` and `b = false`, or only `a = false`.
 4. **Narrowing.** After `assert(cond)`, the checker applies what `if !cond { panic(...) }` would:
    the complement of the false branch holds for the rest of the block (section 7, Narrowing). So
    `assert(x != null)`, `assert(s is Circle)` and `assert(a != null && b != null)` narrow.
@@ -132,6 +142,7 @@ func pop[T](stack: Array[T]): T {
 
 ```
 panic: assertion failed: len(stack) > 0 (0 > 0): pop on empty stack
+  stack = []
   at pop (stack.ant:2:3)
   at main (main.ant:14:9)
 ```
@@ -140,6 +151,16 @@ panic: assertion failed: len(stack) > 0 (0 > 0): pop on empty stack
 var total = Array.sum(prices)
 assert(total == expected)
 // panic: assertion failed: total == expected (9 == 10)
+
+assert(isSorted(merged))
+// panic: assertion failed: isSorted(merged)
+//   merged = [1, 3, 2]
+
+assert(lo <= mid && mid < hi)
+// panic: assertion failed: lo <= mid && mid < hi
+//   lo = 0
+//   mid = 5
+//   hi = 5
 
 var shape = load(id)
 assert(shape is Circle)
@@ -154,10 +175,10 @@ println(user.name)                          // user: User here
 
 ### Comparing structures
 
-When `a == b` fails and both operands are records of one tag, arrays, maps or sets, the two values
-are not printed whole. A record of twenty fields renders as a line nobody reads, and the one field
-that differs is somewhere in the middle. The report instead lists where the values differ, one line
-per difference, below the first line:
+When `a == b` fails and both operands are records of one tag, arrays, maps, sets or `Html`, the two
+values are not printed whole. A record of twenty fields renders as a line nobody reads, and the one
+field that differs is somewhere in the middle. The report instead lists where the values differ, one
+line per difference, below the first line:
 
 ```ant
 type Address = { city: string, zip: string }
@@ -175,25 +196,36 @@ panic: assertion failed: got == want: seeded by fixtures
 ```
 
 Each line is a path from the operands, then the left value and the right value at that path,
-rendered by `String.from`. The two sides are walked together:
+rendered by `String.from`. The walk is `==` itself (section 12, Equality): it goes into exactly the
+values `==` goes into, compares the rest as `==` does, and counts a pair already under comparison as
+equal, so a cyclic value ends (section 4). A path is written the way Ant code reaches the value:
 
 - **Records of one tag** go field by field in the tag's field order; the path adds `.field`.
 - **Arrays** go index by index; the path adds `[i]`. Past the shorter array, the side without an
   element shows `missing`.
 - **Maps** go key by key, the left map's keys in its order and then the right map's other keys; the
   path adds `[key]`, the key rendered by `String.from`. A side without the key shows `missing`.
-- **Sets** give one line per member that only one side has; the path adds `{member}` and the sides
-  show `present` and `missing`.
-- **Anything else is a leaf**: two values of different kinds or tags, a number, a string, `Bytes`,
-  `Html`, a named primitive, a time value, a pattern, and a reference compared by identity. An
-  unequal leaf is one line. Two references that render alike, `Mutex != Mutex`, add
-  `(not the same value)`. `NaN` is a leaf like any number and shows as `NaN != NaN`.
+- **Sets** have no indexing, so a member that only one side has is shown as `Set.has` answers for
+  it: `.roles has "admin": false != true`.
+- **`Html`** is compared by its nodes, so it is walked as `Html.nodes` reads it: the path adds `[i]`
+  per node and then the node record's fields, `.children`, `.attributes[j]`, `.text`. A raw node is
+  compared by its markup.
+- **Anything else is a leaf**: two values of different kinds or tags, a number, a string, `Bytes`, a
+  tagged primitive, a time value, a pattern, and a reference compared by identity. An unequal leaf
+  is one line. Two references that render alike, `Mutex != Mutex`, add `(not the same value)`. `NaN`
+  is a leaf like any number and shows as `NaN != NaN`.
 
-Equal parts print nothing. The lines come in the order the walk meets them, at most ten, then
-`… and 4 more`. A pair of values already on the walk's path is not entered again, so a cyclic value
-ends. When the operands themselves are leaves, as with two records of different tags, rule 3 applies
-as it stands: `(Square{ side: 2 } == Circle{ radius: 1 })`. A failed `!=` means the values are
-equal, so there is nothing to list and rule 3 applies too.
+```
+assert(badge(3) == <b>3</b>)
+// panic: assertion failed: badge(3) == <b>3</b>
+//   [0].children[0].text: "4" != "3"
+```
+
+Equal parts print nothing. The difference lines come after the parts of rule 3, in the order the
+walk meets them, at most ten, then `… and 4 more`. When the operands themselves are leaves, as with
+two records of different tags, rule 3 applies as it stands:
+`(Square{ side: 2 } == Circle{ radius: 1 })`. A failed `!=` means the values are equal, so there is
+nothing to list and rule 3 applies too.
 
 The lines are part of `Panic.message`, joined by line breaks, so a test runner that prints a caught
 panic prints them unchanged. This is pytest's and ExUnit's answer rather than Rust's `assert_eq!`,
@@ -253,10 +285,9 @@ to change the code, it is an `assert`.
   has no optimizer that would benefit, and a wrong assertion must stay a panic.
 - **`require` and `check` as in Kotlin.** They split the same panic by who is at fault. In Ant the
   caller's fault on input is a `Result`; on a documented precondition it is a bug like any other.
-- **Full power-assert.** Showing every subexpression, as Groovy and Swift's `#expect` do, needs the
-  evaluator to record intermediate values and a multi-line diagram. The comparison's two operands
-  carry most of the value at a fraction of the cost. It can be extended later without changing the
-  call.
+- **A power-assert diagram.** Groovy and Swift's `#expect` draw each value under its subexpression.
+  Rule 3 lists the same values one per line instead, which survives a proportional font, a log
+  prefix and line wrapping, and needs no layout rules.
 - **Contracts (`pre`, `post`, `invariant`).** Eiffel, D, Ada and C++26 attach checks to
   declarations. They need syntax on `func` and `type`, rules for inheritance that Ant does not have,
   and give little over an `assert` at the top and bottom of a body.
@@ -273,16 +304,17 @@ All additions. `panic` and narrowing are unchanged in meaning.
 | §8, new subsection `assert` after `panic` | Semantics rules 1–7, the report format, Comparing structures, and the When to use it table                                                        |
 | §11, Prelude                              | Add the signature, and a paragraph that `assert` is built into the checker and the evaluator and, unlike every other prelude name, is not a value |
 | §11, Html                                 | None. Its example `assert(badge(3) == <b>3</b>)` already calls `assert`, which this proposal adds                                                 |
-| §12, Expressions                          | A call of `assert`: evaluation order, the lazy message, the operand values of a comparison                                                        |
+| §12, Expressions                          | A call of `assert`: evaluation order, the lazy message, the values recorded for the report                                                        |
 | §12, Runtime panics                       | Add a row: `assert` with a non-`bool` condition (ruled out) or a false condition (possible)                                                       |
 | `spec/fmt.md`                             | Note that the report prints the condition as `ant fmt` does                                                                                       |
 | `ant/TODO.md`, Test framework             | Drop `Test.equal` and `Test.true` in favor of `assert`                                                                                            |
 | `ant/internal/prelude/prelude.d.ant`      | Declaration of `assert` with its doc comment                                                                                                      |
 
-In the Go interpreter, the resolver rejects `assert` outside a call's callee, the evaluator handles
-the call as a node of its own (condition, optional comparison operands, lazy message), and the
-condition's text comes from `internal/format` once, when the module is loaded, not on each call. The
-JS backend emits the text as a constant at the call site.
+In the Go interpreter, the resolver rejects `assert` outside a call's callee, and the evaluator
+handles the call as a node of its own (condition, lazy message, and the list of parts rule 3 shows).
+It records each part's value as the condition evaluates and drops them when it is true. The texts of
+the condition and its parts come from `internal/format` once, when the module is loaded, not on each
+call. The JS backend emits the texts as constants at the call site.
 
 ## Non-goals
 
@@ -291,19 +323,19 @@ JS backend emits the text as a constant at the call site.
   proposal; this one only makes `assert` good enough to be its assertion.
 - **Custom failure handlers.** C++26 and Java let a program replace what a failed check does. A
   program that must survive a bug in one unit of work uses `Panic.catch` at that unit's edge.
+- **Shortening values.** Values print in full by `String.from`. A pretty printer that folds a long
+  value can come later without changing `assert`.
 - **Panic values other than a message.** An assertion's panic is an ordinary `Panic` record. The
   operand values are in its message, not in fields.
 
 ## Open questions
 
-- [ ] Rule 3 renders values with `String.from`. A large array or a deep record makes a long message.
-      Truncate at some length, as Rust's `{:?}` does not and pytest does, or leave it?
-- [ ] Should `assert(false)` and `assert(true)` be compile errors, pointing at `panic` and at
-      deleting the line? OCaml and D give `assert false` its own meaning; Ant has `panic` for that.
-- [ ] Should rule 3 also show the value of a lone call or variable, `assert(isSorted(xs))` showing
-      `xs`? It would mean choosing which subexpressions matter, which is the power-assert road.
-- [ ] Is the lazy `message` too surprising for a call? It matches every language surveyed but no
-      other Ant function. The alternative is an eager `string` and `if` for expensive messages.
-- [ ] Comparing structures: is ten lines the right cap, and is `{member}` with `present`/`missing`
-      clear enough for sets? Should two `Html` values be walked node by node instead of being one
-      leaf, since a test comparing markup is the case the spec already shows?
+Decided after review:
+
+| Question                                         | Decision                                                                      |
+| ------------------------------------------------ | ----------------------------------------------------------------------------- |
+| Truncate long values?                            | No; `String.from` in full for now, a pretty printer later                     |
+| `assert(false)` and `assert(true)` errors?       | No                                                                            |
+| Show variables and calls, not only the operands? | Yes, rule 3's parts, listed one per line                                      |
+| Lazy `message`?                                  | Yes, as the message of `if !cond { panic(message) }`                          |
+| How to walk sets and `Html` in a diff?           | As `==` does: sets by `Set.has`, `Html` by its nodes; ten lines, then a count |
