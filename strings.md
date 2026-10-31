@@ -52,15 +52,15 @@ echo "deploying ${APP}"
 
 ## Edge cases
 
-| Source                                   | Result                                                   |
-| ---------------------------------------- | -------------------------------------------------------- |
-| `` `C:\temp\new` ``                      | backslashes kept: `C:\temp\new`                          |
-| `` `a ${x} b` `` (old template habit)    | text `a ${x} b`; no interpolation                        |
-| `"${"}"}"`                               | `"}"`: strings nest inside interpolation                 |
-| `"${2}@$1"` for `Regex.replace`          | now interpolates; write `"\${2}@$1"` or `` `${2}@$1` ``  |
-| `name="${x}"` in HTML markup             | unchanged: attribute quotes are markup, not Ant strings  |
-| unterminated `` ` ``                     | syntax error at the opening backtick                     |
-| CRLF source file                         | both forms produce `\n` only                             |
+| Source                                | Result                                                  |
+| ------------------------------------- | ------------------------------------------------------- |
+| `` `C:\temp\new` ``                   | backslashes kept: `C:\temp\new`                         |
+| `` `a ${x} b` `` (old template habit) | text `a ${x} b`; no interpolation                       |
+| `"${"}"}"`                            | `"}"`: strings nest inside interpolation                |
+| `"${2}@$1"` for `Regex.replace`       | now interpolates; write `"\${2}@$1"` or `` `${2}@$1` `` |
+| `name="${x}"` in HTML markup          | unchanged: attribute quotes are markup, not Ant strings |
+| unterminated `` ` ``                  | syntax error at the opening backtick                    |
+| CRLF source file                      | both forms produce `\n` only                            |
 
 ## `ant fmt`
 
@@ -71,12 +71,12 @@ and never reindents the continuation lines of a multi-line string.
 
 - Multi-line raw strings carry their indentation into the value, so they sit at column 0 or the
   value gets leading spaces. Go has the same cost.
-- No interpolation in raw text: indented text with values is `"..."` with indentation as written,
-  or raw strings joined with `+`.
+- No interpolation in raw text: indented text with values is `"..."` with indentation as written, or
+  raw strings joined with `+`.
 - No backtick inside a raw string. Markdown code spans and shell command substitution need `"..."`.
 - `${` gains meaning in `"..."`, which breaks the regex replacement strings in the corpus.
-- Old template strings still parse, as raw strings, so a missed migration gives literal `${x}`
-  text instead of an error.
+- Old template strings still parse, as raw strings, so a missed migration gives literal `${x}` text
+  instead of an error.
 
 ## Spec changes
 

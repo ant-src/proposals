@@ -29,12 +29,12 @@ ant dap                     serve the debug protocol on standard input and stand
 ## Prior art
 
 - **Delve** (`dlv dap`) is Go's debugger and serves DAP directly, with no separate adapter.
-  All-stop: when one goroutine stops, all do; goroutines are DAP threads. Ant follows it on
-  both points.
-- **debugpy** and **js-debug** run in-process or next to the runtime and add a "just my code"
-  filter that skips library frames. Ant needs none: its prelude is written in Go and has no frames.
-- **Lua and Ruby debuggers** (`local-lua-debugger`, `debug.gem`) hook a tree or bytecode
-  interpreter at each line or statement, the approach proposed here.
+  All-stop: when one goroutine stops, all do; goroutines are DAP threads. Ant follows it on both
+  points.
+- **debugpy** and **js-debug** run in-process or next to the runtime and add a "just my code" filter
+  that skips library frames. Ant needs none: its prelude is written in Go and has no frames.
+- **Lua and Ruby debuggers** (`local-lua-debugger`, `debug.gem`) hook a tree or bytecode interpreter
+  at each line or statement, the approach proposed here.
 - **JetBrains.** CLion 2025.3 added DAP debug profiles, but only in CLion. The platform has an
   experimental `dap` extension point with no documentation. LSP4IJ has a DAP client, but
   `intellij-ant` moved off LSP4IJ to the native LSP API. Language plugins that debug in every
@@ -43,15 +43,15 @@ ant dap                     serve the debug protocol on standard input and stand
 ## The command
 
 `ant dap` takes no arguments. It writes nothing to standard output but protocol messages, framed
-with `Content-Length` as in `ant lsp`; what it logs goes to standard error. It serves one client
-and one debug session, and ends when the client disconnects.
+with `Content-Length` as in `ant lsp`; what it logs goes to standard error. It serves one client and
+one debug session, and ends when the client disconnects.
 
-The adapter and the program share one process: `launch` loads the program as `ant run` does and
-runs it on the interpreter with the debugger attached. The program's standard output and standard
-error become `output` events, because the real standard output carries the protocol. The adapter
-never hands the run its own streams: standard output and standard error are writers that are not
-files, and standard input is the `stdin` file or none (Launch). A child that `Cmd.run` starts is
-given the same, so it cannot read or write the protocol either.
+The adapter and the program share one process: `launch` loads the program as `ant run` does and runs
+it on the interpreter with the debugger attached. The program's standard output and standard error
+become `output` events, because the real standard output carries the protocol. The adapter never
+hands the run its own streams: standard output and standard error are writers that are not files,
+and standard input is the `stdin` file or none (Launch). A child that `Cmd.run` starts is given the
+same, so it cannot read or write the protocol either.
 
 The interpreter buffers standard output. The adapter flushes it at every stop, at every line break
 and at least every 100 milliseconds, so what a program printed just before a breakpoint is shown
@@ -59,14 +59,14 @@ when it stops there.
 
 ### Launch
 
-| Attribute     | Meaning                                                          | Default            |
-| ------------- | ---------------------------------------------------------------- | ------------------ |
-| `program`     | the file to run, as given to `ant run`                           | required           |
-| `args`        | the program's arguments (`Os.args`)                              | `[]`               |
-| `cwd`         | the working directory                                            | the program's dir  |
-| `env`         | environment variables added to the adapter's own                 | `{}`               |
-| `stdin`       | a file whose contents are the program's standard input           | none: end of file  |
-| `stopOnEntry` | stop before the first statement of the program's root module     | `false`            |
+| Attribute     | Meaning                                                      | Default           |
+| ------------- | ------------------------------------------------------------ | ----------------- |
+| `program`     | the file to run, as given to `ant run`                       | required          |
+| `args`        | the program's arguments (`Os.args`)                          | `[]`              |
+| `cwd`         | the working directory                                        | the program's dir |
+| `env`         | environment variables added to the adapter's own             | `{}`              |
+| `stdin`       | a file whose contents are the program's standard input       | none: end of file |
+| `stopOnEntry` | stop before the first statement of the program's root module | `false`           |
 
 A program that fails to load (a syntax error, a missing import) ends the session with the error in
 an `output` event and an exit status of `ant run`'s. The `exited` event carries `ant run`'s exit
@@ -86,11 +86,11 @@ Attach to a running `ant run` is not in this proposal (see Non-goals).
 
 ### Stop points
 
-The debugger stops only between statements: before each statement of every block, including the
-body of a function, a lambda, a `go` block, a `defer` block, a `for` body and an `if` or `match`
-branch. A breakpoint on a line binds to the first statement that starts on that line. If no
-statement starts there, it moves to the next line that has one, in the same body. A line past the
-end of every body stays unverified.
+The debugger stops only between statements: before each statement of every block, including the body
+of a function, a lambda, a `go` block, a `defer` block, a `for` body and an `if` or `match` branch.
+A breakpoint on a line binds to the first statement that starts on that line. If no statement starts
+there, it moves to the next line that has one, in the same body. A line past the end of every body
+stays unverified.
 
 A pipeline of two or more stages also stops before each stage: once its left side has been
 evaluated, and before the stage's call. The value flowing in is shown as the pseudo-variable
@@ -113,12 +113,11 @@ lambda's body. Step over goes past them; step in stops at the first one.
 
 Each live goroutine is a thread. The main goroutine is thread 1, named `main`. Others are numbered
 in the order they start and named after their `go` block and number, since one `go` block can start
-many: `go at server.ant:42 #7`. A goroutine that
-ends is reported with a `thread` event.
+many: `go at server.ant:42 #7`. A goroutine that ends is reported with a `thread` event.
 
 All-stop: when any goroutine stops (breakpoint, step, panic or pause), every goroutine stops at its
-next stop point. A goroutine blocked in a channel operation, `select`, `WaitGroup.wait`, a sleep
-or I/O stays where it is. Its stack is shown with the blocking call as its top frame and a
+next stop point. A goroutine blocked in a channel operation, `select`, `WaitGroup.wait`, a sleep or
+I/O stays where it is. Its stack is shown with the blocking call as its top frame and a
 `blocked on receive`-style label. If the operation completes while the program is stopped, the
 goroutine stops before it returns to Ant code. `continue` resumes every goroutine, and so does a
 step: the stepping goroutine stops at the step's end and the rest stop with it.
@@ -132,8 +131,8 @@ the timeout while debugging (Non-goals, Paused clocks).
 
 A thread's frames are the frames of its panic trace (section 8, `panic`): one per function or lambda
 call and one per module body running, with the same names. Each frame carries the position of the
-statement it is at, or of the call it is in. The prelude is written in Go, so a prelude call
-has no frame: a lambda that `Array.map` calls sits directly above the frame that called `Array.map`.
+statement it is at, or of the call it is in. The prelude is written in Go, so a prelude call has no
+frame: a lambda that `Array.map` calls sits directly above the frame that called `Array.map`.
 
 ### Scopes and variables
 
@@ -148,8 +147,8 @@ Each frame has three scopes:
   declaration has not run yet is not shown, as for Locals.
 
 Values show as `String.from` would show them, with strings quoted. Records, arrays, maps, sets, enum
-variants with a payload, `Result` and `Bytes` expand to their parts; arrays and `Bytes` page
-through `indexedVariables`. A function shows its name and parameters.
+variants with a payload, `Result` and `Bytes` expand to their parts; arrays and `Bytes` page through
+`indexedVariables`. A function shows its name and parameters.
 
 The type column shows a value's runtime type. `ant run` discards annotations (section 1, Types are
 advisory), so the declared type is not available; `ant lsp`'s hover still shows it in the editor.
@@ -192,19 +191,19 @@ still be read. `exceptionInfo` gives the message and the trace as section 8 prin
 
 ## Capabilities by phase
 
-| Feature                                     | Phase |
-| ------------------------------------------- | ----- |
-| launch, `stopOnEntry`, output, exit status  | 1     |
-| line breakpoints                            | 1     |
-| threads, stack, scopes, variables           | 1     |
-| continue, pause, step in, over, out         | 1     |
-| break on panic (`uncaught`, `all`)          | 1     |
-| `terminate`, `disconnect`                   | 1     |
-| `evaluate` (watch, hover, debug console)    | 2     |
-| conditional and hit-count breakpoints       | 2     |
-| logpoints                                   | 2     |
-| `setVariable`                               | 3     |
-| function breakpoints                        | 3     |
+| Feature                                    | Phase |
+| ------------------------------------------ | ----- |
+| launch, `stopOnEntry`, output, exit status | 1     |
+| line breakpoints                           | 1     |
+| threads, stack, scopes, variables          | 1     |
+| continue, pause, step in, over, out        | 1     |
+| break on panic (`uncaught`, `all`)         | 1     |
+| `terminate`, `disconnect`                  | 1     |
+| `evaluate` (watch, hover, debug console)   | 2     |
+| conditional and hit-count breakpoints      | 2     |
+| logpoints                                  | 2     |
+| `setVariable`                              | 3     |
+| function breakpoints                       | 3     |
 
 Phase 2 shares one piece: evaluating an expression in a stopped frame. It parses the expression,
 resolves its names against the frame's scopes, and runs it on the stopped goroutine. Every other
@@ -222,9 +221,9 @@ Not part of the contract, listed to size the work. The interpreter stays a tree 
 debugger attached, each check costs one predictable branch. The slot-name tables and the larger
 frames cost memory in every run.
 
-- **Statement hook.** `evalStmts` calls the debugger before each statement when one is attached,
-  and a pipe `Call` before each stage of a pipeline of two or more. All stop logic (breakpoints,
-  steps, pause) is behind it.
+- **Statement hook.** `evalStmts` calls the debugger before each statement when one is attached, and
+  a pipe `Call` before each stage of a pipeline of two or more. All stop logic (breakpoints, steps,
+  pause) is behind it.
 - **Slot names.** The resolver records, for each slot of a `BlockScope`, its name and declaration
   position. Today a scope keeps only slot counts, so locals cannot be named.
 - **Frames with state.** A `Frame` gains its `Env` and its current position. Today it keeps the call
@@ -254,12 +253,12 @@ starts `ant.path` with `dap`, and only in a trusted workspace, as for the langua
 gets a "Debug File" twin.
 
 **IntelliJ (`intellij-ant`).** The existing Ant run configuration gets the Debug executor. An
-`XDebugProcess` starts `ant dap` and speaks DAP through `lsp4j.debug`. A hand-written layer
-suited the LSP, but DAP's variable, scope and paging types are a larger surface to keep in step
-with. An `XLineBreakpointType` covers `.ant` files, and `XStackFrame`, `XValue` and
-`XExecutionStack` map frames, variables and goroutines. This runs in every JetBrains IDE that runs
-the plugin, unlike CLion's DAP profiles. If the platform's `dap` extension point becomes public and
-documented, the client can move to it without changing `ant dap`.
+`XDebugProcess` starts `ant dap` and speaks DAP through `lsp4j.debug`. A hand-written layer suited
+the LSP, but DAP's variable, scope and paging types are a larger surface to keep in step with. An
+`XLineBreakpointType` covers `.ant` files, and `XStackFrame`, `XValue` and `XExecutionStack` map
+frames, variables and goroutines. This runs in every JetBrains IDE that runs the plugin, unlike
+CLion's DAP profiles. If the platform's `dap` extension point becomes public and documented, the
+client can move to it without changing `ant dap`.
 
 ## Spec changes
 
