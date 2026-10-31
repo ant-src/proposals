@@ -1,6 +1,6 @@
 # Proposal: `ant test`
 
-2026-10-31 · Anton · Draft
+2026-10-31 · Anton · Accepted, in spec 015a725 + 88b38f1 and ant ac5c4c0 through 8b02a0c
 
 ## Summary
 
@@ -72,44 +72,44 @@ FAIL  1 failed, 4 passed (0.02s)
 
 ### Frameworks and what they offer
 
-| Feature                  | Go `testing`                        | Rust libtest (+ crates)                         | Zig                       | Swift Testing                            | pytest                                | Jest / Vitest                            | node:test / Deno                          | JUnit 6 / Kotest                  | ExUnit                         | Gleam                  |
-| ------------------------ | ----------------------------------- | ----------------------------------------------- | ------------------------- | ---------------------------------------- | ------------------------------------- | ---------------------------------------- | ----------------------------------------- | --------------------------------- | ------------------------------ | ---------------------- |
-| Declaration              | `func TestX(t *testing.T)`          | `#[test] fn x()`                                | `test "name" { }`         | `@Test("name") func x()`                 | `def test_x():`                       | `test("name", fn)`                       | `test("name", fn)`, `Deno.test`           | `@Test`; Kotest `"name" { }`      | `test "name" do`               | `pub fn x_test()`      |
-| Where                    | `*_test.go`                         | `mod tests` in file, `tests/`                   | same file                 | test target                              | `test_*.py`                           | `*.test.ts`, Vitest in-source            | `*.test.js`, `*_test.ts`                  | `src/test/`                       | `test/*_test.exs`              | `test/`                |
-| Private access           | same package                        | child module                                    | same file                 | `@testable import`                       | everything public                     | exports only                             | exports only                              | package-private                   | public only                    | public only            |
-| Assertion                | `if` + `t.Errorf`; testify          | `assert!`, `assert_eq!`                         | `try expect`, `expectEqual` | `#expect`, `#require`                  | `assert` (rewritten to show values)   | `expect(x).toBe(y)`, ~50 matchers        | `node:assert`, `@std/assert`              | `assertEquals`; Kotest `shouldBe` | `assert` shows both sides      | `assert` keyword       |
-| Keep going after failure | `t.Error`                           | no                                              | no                        | `#expect`                                | no                                    | `expect.soft`                            | no                                        | `assertAll`, soft assertions      | no                             | no                     |
-| Subtests / groups        | `t.Run`                             | modules                                         | no                        | `@Suite`, nested                         | classes                               | `describe`                               | nested `test`, `t.step`                   | `@Nested`, Kotest specs           | `describe`                     | no                     |
-| Parameterized            | table + `t.Run`                     | `rstest`                                        | loop                      | `@Test(arguments:)`                      | `@parametrize`                        | `test.each`                              | loop + nested                             | `@ParameterizedTest`              | loop + `test`                  | loop                   |
-| Setup, teardown          | `t.Cleanup`, `TestMain`             | `Drop`                                          | `defer`                   | `init`, `deinit`                         | fixtures (DI by name, scopes)         | `beforeEach`, `test.extend`              | `before`, `after`, `t.after`              | `@BeforeEach`, extensions         | `setup`, `on_exit`             | none                   |
-| Skip                     | `t.Skip`                            | `#[ignore]`                                     | `error.SkipZigTest`       | `.disabled`, `.enabled(if:)`             | `skip`, `skipif`                      | `.skip`, `.todo`                         | `skip`, `todo`                            | `@Disabled`, `assume`             | `@tag :skip`                   | no                     |
-| Expected failure         | no                                  | `#[should_panic]`                               | no                        | `withKnownIssue`                         | `xfail`                               | `.failing`                               | `expectFailure`                           | `assertThrows`                    | `assert_raise`                 | no                     |
-| Focus                    | no                                  | no                                              | no                        | no                                       | no                                    | `.only`                                  | `only`                                    | no                                | no                             | no                     |
-| Filter                   | `-run A/b`, `-skip`                 | substring                                       | `--test-filter`           | `--filter`, tags                         | `-k expr`, `-m marker`                | `-t`, file glob                          | `--test-name-pattern`                     | tags, `--select`                  | `--only tag`                   | no                     |
-| Parallel                 | opt in, `t.Parallel()`              | default, threads                                | no                        | default, `.serialized`                   | plugin                                | per file                                 | per file; `concurrency`                   | opt in                            | `async: true` per module       | per module (BEAM)      |
-| Time limit               | `-timeout`, dumps all stacks        | nextest                                         | no                        | `.timeLimit`                             | plugin                                | `testTimeout`                            | `timeout`                                 | `@Timeout`                        | `@tag timeout:`                | no                     |
-| Leaks                    | `goleak`, `synctest`   | no                                              | `testing.allocator`       | no                                       | no                                    | `--detectOpenHandles`                    | Deno sanitizers (ops, resources, exit)    | no                                | no                             | no                     |
-| Fake time                | `testing/synctest`                  | tokio `pause`                                   | no                        | no                                       | `freezegun`                           | `vi.useFakeTimers`                       | `mock.timers`, `FakeTime`                 | no                                | no                             | no                     |
-| Mocks                    | interfaces, hand-written            | `mockall`                                       | no                        | no                                       | `unittest.mock`                       | `vi.fn`, `vi.mock`                       | `mock.fn`, `mock.module`                  | Mockito, MockK                    | `Mox` (behaviours)             | no                     |
-| Snapshots                | golden files, `-update` convention  | `insta`                                         | no                        | no                                       | `syrupy`                              | `toMatchSnapshot`, inline                | `t.assert.snapshot`                       | no                                | no                             | `birdie`               |
-| Output check / doctests  | `Example` + `// Output:`            | doctests                                        | doctests                  | no                                       | `doctest`                             | no                                       | no                                        | no                                | `doctest`                      | no                     |
-| Benchmarks               | `B.Loop`                            | `criterion`                                     | no                        | no                                       | plugin                                | `bench`                                  | `Deno.bench`                              | JMH                               | Benchee                        | no                     |
-| Fuzz / property          | `F.Fuzz`, built in                  | `proptest`, `cargo-fuzz`                        | `std.testing.fuzz`        | no                                       | Hypothesis                            | `fast-check`                             | `fast-check`                              | jqwik, Kotest                     | StreamData                     | `qcheck`               |
-| Coverage                 | `-cover`                            | `llvm-cov`                                      | no                        | Xcode                                    | `pytest-cov`                          | built in                                 | built in (Node: experimental)             | JaCoCo                            | `--cover`                      | no                     |
-| Machine output           | `-json` events                      | JSON (unstable)                                 | no                        | JSON event stream                        | JUnit XML                             | reporters, JUnit XML                     | TAP, JUnit XML                            | XML, Open Test Reporting          | formatters                     | no                     |
-| Print in a test          | shown on failure or `-v`            | captured, shown on failure                      | to stderr                 | shown                                    | captured, shown on failure            | shown                                    | shown                                     | shown                             | `capture_io`                   | shown                  |
+| Feature                  | Go `testing`                       | Rust libtest (+ crates)       | Zig                         | Swift Testing                | pytest                              | Jest / Vitest                     | node:test / Deno                       | JUnit 6 / Kotest                  | ExUnit                    | Gleam             |
+| ------------------------ | ---------------------------------- | ----------------------------- | --------------------------- | ---------------------------- | ----------------------------------- | --------------------------------- | -------------------------------------- | --------------------------------- | ------------------------- | ----------------- |
+| Declaration              | `func TestX(t *testing.T)`         | `#[test] fn x()`              | `test "name" { }`           | `@Test("name") func x()`     | `def test_x():`                     | `test("name", fn)`                | `test("name", fn)`, `Deno.test`        | `@Test`; Kotest `"name" { }`      | `test "name" do`          | `pub fn x_test()` |
+| Where                    | `*_test.go`                        | `mod tests` in file, `tests/` | same file                   | test target                  | `test_*.py`                         | `*.test.ts`, Vitest in-source     | `*.test.js`, `*_test.ts`               | `src/test/`                       | `test/*_test.exs`         | `test/`           |
+| Private access           | same package                       | child module                  | same file                   | `@testable import`           | everything public                   | exports only                      | exports only                           | package-private                   | public only               | public only       |
+| Assertion                | `if` + `t.Errorf`; testify         | `assert!`, `assert_eq!`       | `try expect`, `expectEqual` | `#expect`, `#require`        | `assert` (rewritten to show values) | `expect(x).toBe(y)`, ~50 matchers | `node:assert`, `@std/assert`           | `assertEquals`; Kotest `shouldBe` | `assert` shows both sides | `assert` keyword  |
+| Keep going after failure | `t.Error`                          | no                            | no                          | `#expect`                    | no                                  | `expect.soft`                     | no                                     | `assertAll`, soft assertions      | no                        | no                |
+| Subtests / groups        | `t.Run`                            | modules                       | no                          | `@Suite`, nested             | classes                             | `describe`                        | nested `test`, `t.step`                | `@Nested`, Kotest specs           | `describe`                | no                |
+| Parameterized            | table + `t.Run`                    | `rstest`                      | loop                        | `@Test(arguments:)`          | `@parametrize`                      | `test.each`                       | loop + nested                          | `@ParameterizedTest`              | loop + `test`             | loop              |
+| Setup, teardown          | `t.Cleanup`, `TestMain`            | `Drop`                        | `defer`                     | `init`, `deinit`             | fixtures (DI by name, scopes)       | `beforeEach`, `test.extend`       | `before`, `after`, `t.after`           | `@BeforeEach`, extensions         | `setup`, `on_exit`        | none              |
+| Skip                     | `t.Skip`                           | `#[ignore]`                   | `error.SkipZigTest`         | `.disabled`, `.enabled(if:)` | `skip`, `skipif`                    | `.skip`, `.todo`                  | `skip`, `todo`                         | `@Disabled`, `assume`             | `@tag :skip`              | no                |
+| Expected failure         | no                                 | `#[should_panic]`             | no                          | `withKnownIssue`             | `xfail`                             | `.failing`                        | `expectFailure`                        | `assertThrows`                    | `assert_raise`            | no                |
+| Focus                    | no                                 | no                            | no                          | no                           | no                                  | `.only`                           | `only`                                 | no                                | no                        | no                |
+| Filter                   | `-run A/b`, `-skip`                | substring                     | `--test-filter`             | `--filter`, tags             | `-k expr`, `-m marker`              | `-t`, file glob                   | `--test-name-pattern`                  | tags, `--select`                  | `--only tag`              | no                |
+| Parallel                 | opt in, `t.Parallel()`             | default, threads              | no                          | default, `.serialized`       | plugin                              | per file                          | per file; `concurrency`                | opt in                            | `async: true` per module  | per module (BEAM) |
+| Time limit               | `-timeout`, dumps all stacks       | nextest                       | no                          | `.timeLimit`                 | plugin                              | `testTimeout`                     | `timeout`                              | `@Timeout`                        | `@tag timeout:`           | no                |
+| Leaks                    | `goleak`, `synctest`               | no                            | `testing.allocator`         | no                           | no                                  | `--detectOpenHandles`             | Deno sanitizers (ops, resources, exit) | no                                | no                        | no                |
+| Fake time                | `testing/synctest`                 | tokio `pause`                 | no                          | no                           | `freezegun`                         | `vi.useFakeTimers`                | `mock.timers`, `FakeTime`              | no                                | no                        | no                |
+| Mocks                    | interfaces, hand-written           | `mockall`                     | no                          | no                           | `unittest.mock`                     | `vi.fn`, `vi.mock`                | `mock.fn`, `mock.module`               | Mockito, MockK                    | `Mox` (behaviours)        | no                |
+| Snapshots                | golden files, `-update` convention | `insta`                       | no                          | no                           | `syrupy`                            | `toMatchSnapshot`, inline         | `t.assert.snapshot`                    | no                                | no                        | `birdie`          |
+| Output check / doctests  | `Example` + `// Output:`           | doctests                      | doctests                    | no                           | `doctest`                           | no                                | no                                     | no                                | `doctest`                 | no                |
+| Benchmarks               | `B.Loop`                           | `criterion`                   | no                          | no                           | plugin                              | `bench`                           | `Deno.bench`                           | JMH                               | Benchee                   | no                |
+| Fuzz / property          | `F.Fuzz`, built in                 | `proptest`, `cargo-fuzz`      | `std.testing.fuzz`          | no                           | Hypothesis                          | `fast-check`                      | `fast-check`                           | jqwik, Kotest                     | StreamData                | `qcheck`          |
+| Coverage                 | `-cover`                           | `llvm-cov`                    | no                          | Xcode                        | `pytest-cov`                        | built in                          | built in (Node: experimental)          | JaCoCo                            | `--cover`                 | no                |
+| Machine output           | `-json` events                     | JSON (unstable)               | no                          | JSON event stream            | JUnit XML                           | reporters, JUnit XML              | TAP, JUnit XML                         | XML, Open Test Reporting          | formatters                | no                |
+| Print in a test          | shown on failure or `-v`           | captured, shown on failure    | to stderr                   | shown                        | captured, shown on failure          | shown                             | shown                                  | shown                             | `capture_io`              | shown             |
 
 ### What the field has converged on
 
 - **The assertion is a boolean that explains itself.** Gleam deprecated gleeunit's `should` module
   for its `assert` keyword; Swift Testing replaced XCTest's forty `XCTAssert*` functions with
   `#expect` and `#require`; pytest is chosen largely for its rewritten `assert`; Kotlin added a
-  power-assert compiler plugin. Matcher libraries (Jest, AssertJ, Hamcrest, Kotest) remain where
-  the language cannot show a condition's values. Ant's `assert` can.
+  power-assert compiler plugin. Matcher libraries (Jest, AssertJ, Hamcrest, Kotest) remain where the
+  language cannot show a condition's values. Ant's `assert` can.
 - **Tests are statically known.** Annotations (Rust, Swift, JUnit), declarations (Zig) and naming
-  conventions (Go, pytest, Gleam) let editors list tests without running code, which every
-  "run | debug" code lens depends on. Registration by call (Jest, node:test, ExUnit) gives dynamic
-  tests for free but needs the file executed to know what is in it.
+  conventions (Go, pytest, Gleam) let editors list tests without running code, which every "run |
+  debug" code lens depends on. Registration by call (Jest, node:test, ExUnit) gives dynamic tests
+  for free but needs the file executed to know what is in it.
 - **Plain code over lifecycle hooks.** Go's `t.Cleanup`, Zig's `defer`, Swift's `init`/`deinit` of a
   suite. pytest fixtures are powerful and also the most magic part of pytest. `beforeEach` chains in
   nested `describe` blocks are a common source of order-dependent tests.
@@ -151,23 +151,24 @@ func testEmptyStackHasLengthZero(t: Test) {
 }
 ```
 
-Go's form: any top-level `func` in a test file whose name starts with `test` followed by an upper-case
-letter or `_`, taking a `Test` or nothing. Subtests are `Test.run(t, "name", func(t: Test) { ... })`.
+Go's form: any top-level `func` in a test file whose name starts with `test` followed by an
+upper-case letter or `_`, taking a `Test` or nothing. Subtests are
+`Test.run(t, "name", func(t: Test) { ... })`.
 
 ### Comparison
 
-|                       | A: `test "name" { }`                                                                | B: `func testX(t: Test)`                                                                              |
-| --------------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| Name                  | A sentence: `"pop on an empty stack panics"`                                        | An identifier: `testPopOnEmptyStackPanics`                                                            |
-| Grammar               | One new form; `test` becomes a keyword in test files only                           | None                                                                                                  |
-| Discovery rule        | The declaration is the test                                                         | A naming rule. Ant's case carries no meaning (section 2), so `testing()` or `tests()` need a rule too |
-| Callable by mistake   | No; a test is not a value                                                           | Yes; a helper can call a test, and a test can be passed around                                        |
-| Subtests              | The same form nested: `for c in cases { test "${c.name}" { ... } }`                 | `Test.run(t, "name", func(t: Test) { ... })`, the `t` threaded through                                |
-| Handle `t`            | Not needed: `Test.skip()` acts on the calling goroutine's test                      | Every helper that skips or makes a temp dir takes `t`                                                 |
-| `try` in the body     | A test body may return an `Err`, which fails the test, as a script body may         | The function's signature says `void`; `try` needs `Result[void, Error]` spelled out                   |
-| Tools                 | LSP lens on `test`; DAP launches by name                                            | Same, on a `func`                                                                                     |
-| Familiar from         | Zig, Kotest, ExUnit, Jest's names, Pyret `check:`                                   | Go, pytest, Gleam                                                                                     |
-| Cost                  | A keyword and a statement form in the spec, parser, formatter and checker           | A naming convention the checker must know, and the `Test` type as a parameter                         |
+|                     | A: `test "name" { }`                                                        | B: `func testX(t: Test)`                                                                              |
+| ------------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Name                | A sentence: `"pop on an empty stack panics"`                                | An identifier: `testPopOnEmptyStackPanics`                                                            |
+| Grammar             | One new form; `test` becomes a keyword in test files only                   | None                                                                                                  |
+| Discovery rule      | The declaration is the test                                                 | A naming rule. Ant's case carries no meaning (section 2), so `testing()` or `tests()` need a rule too |
+| Callable by mistake | No; a test is not a value                                                   | Yes; a helper can call a test, and a test can be passed around                                        |
+| Subtests            | The same form nested: `for c in cases { test "${c.name}" { ... } }`         | `Test.run(t, "name", func(t: Test) { ... })`, the `t` threaded through                                |
+| Handle `t`          | Not needed: `Test.skip()` acts on the calling goroutine's test              | Every helper that skips or makes a temp dir takes `t`                                                 |
+| `try` in the body   | A test body may return an `Err`, which fails the test, as a script body may | The function's signature says `void`; `try` needs `Result[void, Error]` spelled out                   |
+| Tools               | LSP lens on `test`; DAP launches by name                                    | Same, on a `func`                                                                                     |
+| Familiar from       | Zig, Kotest, ExUnit, Jest's names, Pyret `check:`                           | Go, pytest, Gleam                                                                                     |
+| Cost                | A keyword and a statement form in the spec, parser, formatter and checker   | A naming convention the checker must know, and the `Test` type as a parameter                         |
 
 Option A is proposed. It is the integrated form: a test is a thing in the language, not a function
 that a tool treats specially by its spelling, so it cannot be called, passed, or mistaken for a
@@ -206,15 +207,15 @@ test "name" { body }
    and not empty, so tools know every top-level test without running anything. A subtest's name may
    interpolate. Two subtests of one parent with the same name get ` #2`, ` #3` appended, as Go's
    `t.Run` does. The full name joins the names with `/`: `parse/0x10`.
-3. **Body.** The body is a boundary, like a script body (section 10): `return` ends the test, `defer`
-   registers on it, `try` returns an `Err` from it, and the checker allows `void` or an `Err` as its
-   result. A test is not a value; nothing can call it.
-4. **Outcome.** A test **fails** when a panic leaves its body (an `assert` or any other), when its body
-   returns an `Err`, when a goroutine it owns panics, when a goroutine it owns is still running after
-   it ends (Goroutines, below), or when one of its subtests fails. It is **skipped** when it calls
-   `Test.skip`. Otherwise it **passes**. A failure ends the body at once, as any panic does, after
-   its deferred blocks run: there is no failure that records and goes on. A failed subtest does not
-   end its parent's body, which goes on to the next row and fails when it ends.
+3. **Body.** The body is a boundary, like a script body (section 10): `return` ends the test,
+   `defer` registers on it, `try` returns an `Err` from it, and the checker allows `void` or an
+   `Err` as its result. A test is not a value; nothing can call it.
+4. **Outcome.** A test **fails** when a panic leaves its body (an `assert` or any other), when its
+   body returns an `Err`, when a goroutine it owns panics, when a goroutine it owns is still running
+   after it ends (Goroutines, below), or when one of its subtests fails. It is **skipped** when it
+   calls `Test.skip`. Otherwise it **passes**. A failure ends the body at once, as any panic does,
+   after its deferred blocks run: there is no failure that records and goes on. A failed subtest
+   does not end its parent's body, which goes on to the next row and fails when it ends.
 5. **Order.** Top-level tests run one at a time in source order, subtests in the order their
    statements run, except tests that call `Test.parallel()`.
 
@@ -232,7 +233,8 @@ Test.context(): Context                   // cancelled when the test's body ends
 Test.name(): string                       // the full name, "parse/0x10"
 ```
 
-- **`Test.skip`** in a subtest skips the subtest. A test that is skipped after it failed stays failed.
+- **`Test.skip`** in a subtest skips the subtest. A test that is skipped after it failed stays
+  failed.
 - **`Test.parallel`** follows Go's `t.Parallel`. The test stops at the call until every sequential
   test of the same parent (or of the file, for a top-level test) has finished, then runs alongside
   the parent's other parallel tests, at most `-parallel n` at a time. A parent ends after all of its
@@ -255,8 +257,8 @@ starts.
 - When the body and its deferred blocks have finished, the runner cancels the test's context and
   waits a short grace for the test's goroutines to end. One still running after it fails the test
   with `goroutine started at path:line outlived the test`, and the runner ends it the way a
-  cancelled run ends every goroutine (section 9, Goroutines): at its next call or loop iteration.
-  So a leaked goroutine cannot disturb the next test.
+  cancelled run ends every goroutine (section 9, Goroutines): at its next call or loop iteration. So
+  a leaked goroutine cannot disturb the next test.
 
 ### Output and reports
 
@@ -290,19 +292,19 @@ ant test [flags] [path ...]
 - `ant test`, like `ant run`, does not type-check (section 4, Checking and running). `ant check`
   accepts test files and checks them with their companions; CI runs both.
 
-| Flag             | Meaning                                                                                                                      |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `-run regexp`    | Run only tests whose full name matches. Split on `/`, each part matches one level, as Go's `-run`: `-run 'parse/0x'`          |
-| `-skip regexp`   | Skip tests that match, the same way                                                                                          |
-| `-v`             | Print every test's start and result, and every test's output                                                                 |
-| `-json`          | Print events as JSON lines instead                                                                                           |
-| `-failfast`      | Stop starting tests after the first failure                                                                                  |
-| `-parallel n`    | The most tests that run at once after `Test.parallel()`; the default is the number of CPUs                                   |
-| `-timeout d`     | End the run after `d` (default `10m`), print every goroutine's stack and the tests that were running, and exit with status 1 |
+| Flag           | Meaning                                                                                                                      |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `-run regexp`  | Run only tests whose full name matches. Split on `/`, each part matches one level, as Go's `-run`: `-run 'parse/0x'`         |
+| `-skip regexp` | Skip tests that match, the same way                                                                                          |
+| `-v`           | Print every test's start and result, and every test's output                                                                 |
+| `-json`        | Print events as JSON lines instead                                                                                           |
+| `-failfast`    | Stop starting tests after the first failure                                                                                  |
+| `-parallel n`  | The most tests that run at once after `Test.parallel()`; the default is the number of CPUs                                   |
+| `-timeout d`   | End the run after `d` (default `10m`), print every goroutine's stack and the tests that were running, and exit with status 1 |
 
 Exit status, as `ant run` (section 10, Scripts): `0` when no test failed (skipped tests and no tests
-at all included), `1` when a test failed or the time ran out, and `2` when a file could not be loaded
-because of a syntax error, an import cycle, a missing module or a bad import.
+at all included), `1` when a test failed or the time ran out, and `2` when a file could not be
+loaded because of a syntax error, an import cycle, a missing module or a bad import.
 
 ### Editors and the debugger
 
@@ -388,8 +390,8 @@ test "divide by zero panics" {
 - **Option B, functions named `test...`.** See Declaring a test. Kept here as the main alternative
   until review.
 - **A failure that records and goes on** (Go `t.Error`, Swift `#expect`, `expect.soft`). Every
-  failure is a panic, so one rule covers `assert`, `panic`, `?? panic`, `Result.unwrap` and a bug
-  in the code under test, and narrowing after `assert` stays sound. The case that needs several
+  failure is a panic, so one rule covers `assert`, `panic`, `?? panic`, `Result.unwrap` and a bug in
+  the code under test, and narrowing after `assert` stays sound. The case that needs several
   failures in one run is a table, and subtests give each row its own result.
 - **A matcher library** (`expect(x).toBe(y)`, `Test.equal`). `assert` shows both sides of a
   comparison and the parts of any condition (section 8).
@@ -417,24 +419,51 @@ test "divide by zero panics" {
 
 ## Spec changes
 
-| Where                                      | Change                                                                                                                           |
-| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
-| `spec/ant-lang.md` §2, Keywords            | `test` is a keyword in test files only                                                                                            |
-| §5, new subsection or §10 after Scripts    | Test files, the companion scope, the `test` declaration and subtest statement, outcome and order                                  |
-| §8, `assert`                               | A sentence that a failed `assert` in a test fails that test                                                                       |
-| §9, Panics in goroutines                   | A goroutine owned by a test reports its panic to the test                                                                         |
-| §11, Prelude                               | The `Test` namespace                                                                                                              |
-| §12, Dynamic semantics                     | Running a test: `Panic.catch`, deferred blocks, ownership of goroutines, the grace and cancellation, collected output             |
-| `spec/fmt.md`                              | Formatting of `test "name" { }`, as a `func` declaration                                                                         |
-| `spec/lsp.md`, `spec/dap.md`               | Code lenses and symbols; the `test` launch option                                                                                 |
-| new `spec/test.md`, or a section of a CLI doc | `ant test`: paths, flags, report, `-json` events, exit status                                                                 |
-| `ant/TODO.md`                              | Drop the Test framework entry                                                                                                     |
+| Where                                         | Change                                                                                                                |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `spec/ant-lang.md` §2, Keywords               | `test` is a keyword in test files only                                                                                |
+| §5, new subsection or §10 after Scripts       | Test files, the companion scope, the `test` declaration and subtest statement, outcome and order                      |
+| §8, `assert`                                  | A sentence that a failed `assert` in a test fails that test                                                           |
+| §9, Panics in goroutines                      | A goroutine owned by a test reports its panic to the test                                                             |
+| §11, Prelude                                  | The `Test` namespace                                                                                                  |
+| §12, Dynamic semantics                        | Running a test: `Panic.catch`, deferred blocks, ownership of goroutines, the grace and cancellation, collected output |
+| `spec/fmt.md`                                 | Formatting of `test "name" { }`, as a `func` declaration                                                              |
+| `spec/lsp.md`, `spec/dap.md`                  | Code lenses and symbols; the `test` launch option                                                                     |
+| new `spec/test.md`, or a section of a CLI doc | `ant test`: paths, flags, report, `-json` events, exit status                                                         |
+| `ant/TODO.md`                                 | Drop the Test framework entry                                                                                         |
 
-## Open questions
+## Decisions
+
+Accepted with Option A and the defaults this proposal names; the spec is now the reference (section
+10, Tests; section 11, Test; `test.md`).
+
+1. Option A, the `test` declaration.
+2. The companion scope, as proposed. A sibling script is not a companion. An explicit import of a
+   name the companion already brings is an error, as any second binding is.
+3. A goroutine that outlives its test fails it, after a grace of 100 milliseconds.
+4. Files run one after another.
+5. No `-count` or `-shuffle` yet.
+6. No `Test.setenv` or `Test.chdir`.
+7. No per-test time limit; `-timeout` covers the run.
+8. `ant test` does not type-check; `ant check` accepts test files.
+
+Changed in review:
+
+- A test file may `export`: without it, a helper file that other test files import, such as
+  `helpers_test.ant`, would have nothing to offer.
+- Ant has no anonymous record literals, so a table declares its row type:
+  `type Case = { input: string, want: int }`, then `Case{ ... }`. The examples above predate this.
+- `Test.skip` in a deferred block does not replace a panic that is unwinding: a failed test stays
+  failed.
+- The report's trace names the test frame, `at test "0x10" (stack_test.ant:21:7)`, and the verbose
+  lines are `--- PASS:`, `--- FAIL:`, `--- SKIP:` with a colon, as Go's are.
+- The debugger stops at the panic that fails a test, under its `uncaught` filter.
+
+## Open questions (resolved above)
 
 1. Option A or Option B (Declaring a test).
-2. The companion scope: should `foo_test.ant` see `foo.ant`'s private names, or should every test
-   be black-box through `import`? Go has both; Rust and Zig only white-box; Gleam and Elixir only
+2. The companion scope: should `foo_test.ant` see `foo.ant`'s private names, or should every test be
+   black-box through `import`? Go has both; Rust and Zig only white-box; Gleam and Elixir only
    black-box.
 3. Goroutine leak checking: fail by default as proposed, or warn? How long is the grace?
 4. Should files run in parallel? Each file is a fresh program, so module state is safe, but the
