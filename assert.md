@@ -8,8 +8,9 @@ Add `assert(cond, message?)` to the prelude. It panics when `cond` is false, wit
 quotes the condition as written and, for a comparison, the two values compared. It narrows like
 `if !cond { panic(...) }`, so `assert(user != null)` leaves `user` a `User` below it. It is always
 on: no flag, build mode or release setting removes it. The message is evaluated only on failure.
-`assert` is built into the checker and the evaluator, as `len` and `println` are, and is not a
-value. No keyword, no new syntax, no debug-only variant.
+`assert` is built into the checker and the evaluator and, unlike every other prelude name, is not a
+value: its report needs the condition's source text, which only a call site has. No keyword, no new
+syntax, no debug-only variant.
 
 ## Motivation
 
@@ -21,7 +22,7 @@ way to write the check, and a good report when it fails.
    long enough that people skip it.
 2. **The report says too little.** `panic("i out of range")` gives a message and a trace. It does
    not say what `i` was, or which of two similar checks on the line failed. Every author writes the
-   values into the message by hand, ``panic(`i out of range: ${i} >= ${len(xs)}`)``, or does not.
+   values into the message by hand, `panic("i out of range: ${i} >= ${len(xs)}")`, or does not.
 3. **Tests need it.** The test framework sketched in `ant/TODO.md` proposes `Test.equal` and
    `Test.true` so that a failure shows both values. If the language's own check shows both values,
    most of that API is unnecessary: a test is a function that calls `assert`, and the runner already
@@ -96,20 +97,25 @@ assert(cond: bool, message: string = ""): void   // panics if cond is false; mes
    with its trace (section 12, Deferred blocks and panics). The innermost frame is the `assert`
    call.
 2. **The message.** The panic message is `assertion failed: ` followed by the condition as `ant fmt`
-   prints it on one line. A non-empty `message` follows after `: `. Comments and line breaks in the
-   source do not appear.
+   prints it on one line, then the values of rule 3 when there are any, then `: ` and `message` when
+   it is not empty. Comments and line breaks in the source do not appear.
 3. **Values of a comparison.** When the outermost operator of `cond` is `==`, `!=`, `<`, `<=`, `>`,
-   `>=` or `is`, each operand is evaluated once, as it would be anyway, and on failure the message
-   ends with the two values in parentheses, rendered by `String.from`. For `is`, the right side is
-   the tag of the left value. Nothing else is decomposed: `assert(a && b)` reports the text only,
-   since short-circuiting means one side may not have run.
+   `>=` or `is`, each operand is evaluated once, as it would be anyway, and on failure the two
+   values follow the condition in parentheses, rendered by `String.from`, so they stand next to the
+   text they belong to: `total == expected (9 == 10)`. For `is`, the left value is shown in full and
+   the right side is the left value's actual tag. A failed `==` between two structures lists the
+   differences instead (see Comparing structures). Nothing else is decomposed: `assert(a && b)`
+   reports the text only, since short-circuiting means one side may not have run.
 4. **Narrowing.** After `assert(cond)`, the checker applies what `if !cond { panic(...) }` would:
    the complement of the false branch holds for the rest of the block (section 7, Narrowing). So
    `assert(x != null)`, `assert(s is Circle)` and `assert(a != null && b != null)` narrow.
 5. **Not a value.** `assert` may only be called by name. `Array.map(flags, assert)` or
    `var check = assert` is a compile error and, unchecked, a syntax error from the resolver, which
    already knows the name cannot be shadowed (section 3). A direct call is therefore always the
-   prelude's `assert`.
+   prelude's `assert`. This makes `assert` the one prelude name that is not a value: `len`,
+   `println` and the conversions are built into the checker too, but each can still be passed
+   (`Array.map(words, len)`). `assert` cannot, because rules 2 and 3 need the condition as written
+   and its operands, which exist only at a call site.
 6. **Unchecked runs.** Rules 1–3 are run-time rules and hold under `ant run` without `ant check`. A
    `cond` that is not a `bool` panics as `if` does (section 12, Runtime panics), and a `message`
    that is not a string panics as `panic` does.
@@ -125,7 +131,7 @@ func pop[T](stack: Array[T]): T {
 ```
 
 ```
-panic: assertion failed: len(stack) > 0: pop on empty stack (0 > 0)
+panic: assertion failed: len(stack) > 0 (0 > 0): pop on empty stack
   at pop (stack.ant:2:3)
   at main (main.ant:14:9)
 ```
@@ -141,10 +147,57 @@ println(shape.radius)                       // shape: Circle here
 // panic: assertion failed: shape is Circle (Square{ side: 2 } is Square)
 
 var user = find(users, id)
-assert(user != null, `user ${id} seeded above`)
+assert(user != null, "user ${id} seeded above")
 println(user.name)                          // user: User here
-// panic: assertion failed: user != null: user 7 seeded above (null != null)
+// panic: assertion failed: user != null (null != null): user 7 seeded above
 ```
+
+### Comparing structures
+
+When `a == b` fails and both operands are records of one tag, arrays, maps or sets, the two values
+are not printed whole. A record of twenty fields renders as a line nobody reads, and the one field
+that differs is somewhere in the middle. The report instead lists where the values differ, one line
+per difference, below the first line:
+
+```ant
+type Address = { city: string, zip: string }
+type User = { id: int, name: string, address: Address, roles: Array[string] }
+
+assert(got == want, "seeded by fixtures")
+```
+
+```
+panic: assertion failed: got == want: seeded by fixtures
+  .name: "Ann" != "Anne"
+  .address.city: "Bern" != "Basel"
+  .roles[2]: missing != "admin"
+  at check (users_test.ant:12:3)
+```
+
+Each line is a path from the operands, then the left value and the right value at that path,
+rendered by `String.from`. The two sides are walked together:
+
+- **Records of one tag** go field by field in the tag's field order; the path adds `.field`.
+- **Arrays** go index by index; the path adds `[i]`. Past the shorter array, the side without an
+  element shows `missing`.
+- **Maps** go key by key, the left map's keys in its order and then the right map's other keys; the
+  path adds `[key]`, the key rendered by `String.from`. A side without the key shows `missing`.
+- **Sets** give one line per member that only one side has; the path adds `{member}` and the sides
+  show `present` and `missing`.
+- **Anything else is a leaf**: two values of different kinds or tags, a number, a string, `Bytes`,
+  `Html`, a named primitive, a time value, a pattern, and a reference compared by identity. An
+  unequal leaf is one line. Two references that render alike, `Mutex != Mutex`, add
+  `(not the same value)`. `NaN` is a leaf like any number and shows as `NaN != NaN`.
+
+Equal parts print nothing. The lines come in the order the walk meets them, at most ten, then
+`… and 4 more`. A pair of values already on the walk's path is not entered again, so a cyclic value
+ends. When the operands themselves are leaves, as with two records of different tags, rule 3 applies
+as it stands: `(Square{ side: 2 } == Circle{ radius: 1 })`. A failed `!=` means the values are
+equal, so there is nothing to list and rule 3 applies too.
+
+The lines are part of `Panic.message`, joined by line breaks, so a test runner that prints a caught
+panic prints them unchanged. This is pytest's and ExUnit's answer rather than Rust's `assert_eq!`,
+which prints both values in full and leaves the diff to the reader.
 
 The message follows the error convention of section 8: lowercase, no closing punctuation, context
 first. A message names the reason the condition should hold, not the condition again.
@@ -190,8 +243,8 @@ to change the code, it is an `assert`.
 - **A keyword, `assert cond, msg`.** Python, Java, OCaml and Gleam spell it as syntax. Ant has one
   prefix keyword (`try`) and keeps everything else a prelude name, including `panic`. A call with a
   default message parameter reads like every other call, needs no grammar change and no new reserved
-  word. The cost is that `assert` is a prelude name with special evaluation, as `len` and `println`
-  are already special in the checker.
+  word. The cost is that `assert` is a prelude name with special evaluation, and the only one that
+  is not a value (rule 5).
 - **`assertEqual`, `assert_eq`.** A second name for the most common case. Rule 3 gives `==` the same
   report, and covers `<` and `is` too.
 - **`debugAssert` or a `-O` flag.** See Prior art. A check too expensive for production is guarded
@@ -213,22 +266,23 @@ to change the code, it is an `assert`.
 
 All additions. `panic` and narrowing are unchanged in meaning.
 
-| Where                                     | Change                                                                                                                                     |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `spec/ant-lang.md` §1, Principles         | None. "`panic` is for bugs" already covers it                                                                                              |
-| §7, Narrowing                             | Add to the second bullet: `assert(cond)` narrows the rest of the block as `if !cond { panic(...) }` does                                   |
-| §8, new subsection `assert` after `panic` | Semantics rules 1–7, the report format, and the When to use it table                                                                       |
-| §11, Prelude                              | Add the signature, and a paragraph that `assert` is built into the checker and the evaluator, like `len` and `println`, and is not a value |
-| §12, Expressions                          | A call of `assert`: evaluation order, the lazy message, the operand values of a comparison                                                 |
-| §12, Runtime panics                       | Add a row: `assert` with a non-`bool` condition (ruled out) or a false condition (possible)                                                |
-| `spec/fmt.md`                             | Note that the report prints the condition as `ant fmt` does                                                                                |
-| `ant/TODO.md`, Test framework             | Drop `Test.equal` and `Test.true` in favor of `assert`                                                                                     |
-| `stdlib/prelude.ant`                      | Doc comment for `assert`                                                                                                                   |
+| Where                                     | Change                                                                                                                                            |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `spec/ant-lang.md` §1, Principles         | None. "`panic` is for bugs" already covers it                                                                                                     |
+| §7, Narrowing                             | Add to the second bullet: `assert(cond)` narrows the rest of the block as `if !cond { panic(...) }` does                                          |
+| §8, new subsection `assert` after `panic` | Semantics rules 1–7, the report format, Comparing structures, and the When to use it table                                                        |
+| §11, Prelude                              | Add the signature, and a paragraph that `assert` is built into the checker and the evaluator and, unlike every other prelude name, is not a value |
+| §11, Html                                 | None. Its example `assert(badge(3) == <b>3</b>)` already calls `assert`, which this proposal adds                                                 |
+| §12, Expressions                          | A call of `assert`: evaluation order, the lazy message, the operand values of a comparison                                                        |
+| §12, Runtime panics                       | Add a row: `assert` with a non-`bool` condition (ruled out) or a false condition (possible)                                                       |
+| `spec/fmt.md`                             | Note that the report prints the condition as `ant fmt` does                                                                                       |
+| `ant/TODO.md`, Test framework             | Drop `Test.equal` and `Test.true` in favor of `assert`                                                                                            |
+| `ant/internal/prelude/prelude.d.ant`      | Declaration of `assert` with its doc comment                                                                                                      |
 
 In the Go interpreter, the resolver rejects `assert` outside a call's callee, the evaluator handles
 the call as a node of its own (condition, optional comparison operands, lazy message), and the
-condition's text comes from `internal/format` once, when the module is loaded, not on each call. A
-generated-Go or JS backend emits the text as a constant at the call site.
+condition's text comes from `internal/format` once, when the module is loaded, not on each call. The
+JS backend emits the text as a constant at the call site.
 
 ## Non-goals
 
@@ -250,3 +304,6 @@ generated-Go or JS backend emits the text as a constant at the call site.
       `xs`? It would mean choosing which subexpressions matter, which is the power-assert road.
 - [ ] Is the lazy `message` too surprising for a call? It matches every language surveyed but no
       other Ant function. The alternative is an eager `string` and `if` for expensive messages.
+- [ ] Comparing structures: is ten lines the right cap, and is `{member}` with `present`/`missing`
+      clear enough for sets? Should two `Html` values be walked node by node instead of being one
+      leaf, since a test comparing markup is the case the spec already shows?
