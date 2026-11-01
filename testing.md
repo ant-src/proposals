@@ -439,7 +439,9 @@ Accepted with Option A and the defaults this proposal names; the spec is now the
 
 1. Option A, the `test` declaration.
 2. The companion scope, as proposed. A sibling script is not a companion. An explicit import of a
-   name the companion already brings is an error, as any second binding is.
+   name the companion already brings is an error, as any second binding is. Replaced on 2026-11-01
+   (spec 2b88985, ant d776538): a test file sees only what it imports, and its imports reach every
+   top-level declaration of a module, exported or not.
 3. A goroutine that outlives its test fails it, after a grace of 100 milliseconds.
 4. Files run one after another.
 5. No `-count` or `-shuffle` yet.
