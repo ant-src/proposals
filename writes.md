@@ -6,9 +6,9 @@
 
 Make writes behave as they do in Go. Buffering happens only where the program asks for it.
 
-- **Every write is one OS write.** This covers `File.write*` on any handle, `print`, `println`,
-  `eprint`, `eprintln`, connections and pipe ends. Nothing is held back, so nothing needs a flush,
-  and output appears in program order.
+- **Every write goes to the OS before it returns.** This covers `File.write*` on any handle,
+  `print`, `println`, `eprint`, `eprintln`, connections and pipe ends. Nothing is held back, so
+  nothing needs a flush, and output appears in program order.
 - **`File.buffered(f)` is the opt-in.** It returns a handle whose writes collect in a buffer until
   the buffer is full, `File.flush` is called, or `File.close` is called. It is Go's `bufio.Writer`,
   as a `File.Handle`.
@@ -175,8 +175,9 @@ These are the costs of the proposal:
 
 ### Writes
 
-A write to a handle that is not buffered is one write to the OS. It returns once the OS has taken
-the bytes, and reports the OS's error. This applies to:
+A write to a handle that is not buffered is handed to the OS before it returns: all of its bytes, or
+`Err`. Nothing is held back. How many system calls it takes is not promised; as Go's `File.Write`
+does, a write continues after a partial write or an interrupted call. This applies to:
 
 - `File.writeLine`, `writeText`, `writeChunk` and `pipe`;
 - `print`, `println`, `eprint` and `eprintln`, which write to `Os.stdout()` and `Os.stderr()`;
@@ -184,6 +185,13 @@ the bytes, and reports the OS's error. This applies to:
 
 Since nothing is held, output from `print`, `Os.stdout()`, standard error and children comes out in
 the order the program wrote it. A prompt shows before the read that follows it.
+
+`print`, `println`, `eprint` and `eprintln` return `void`, and a write they fail is ignored, as Go
+programs ignore what `fmt.Println` returns. One failure ends the program: a write to standard output
+or standard error whose reader has gone, a broken pipe, ends it as SIGPIPE does, as a Go program's
+does. So `ant gen.ant | head` stops when `head` has read enough. A program that must know a write to
+a standard stream succeeded writes it with `File.writeLine(Os.stdout(), …)`, which returns a
+`Result`.
 
 `File.pipe` copies chunk by chunk:
 
@@ -205,7 +213,7 @@ Unchanged. Each handle that reads has one read buffer, shared by all its reads.
 
 ```ant
 File.buffered(f: File.Handle, size: int = 4096): File.Handle    // writes held until full, flush or close
-File.flush(f: File.Handle): Result[void, Error]                 // writes out a buffered handle; Ok on any other
+File.flush(f: File.Handle): Result[void, Error]                 // hands what was written to f to the OS; Ok on a handle not buffered
 File.close(f: File.Handle): Result[void, Error]                 // a buffered handle: writes out, then closes f
 ```
 
@@ -218,18 +226,29 @@ File.close(f: File.Handle): Result[void, Error]                 // a buffered ha
 - **Already buffered.** When `f` is itself a buffered handle whose buffer is at least `size`,
   `File.buffered` returns `f`, as `bufio.NewWriterSize` returns a `*bufio.Writer` that is already
   large enough. A smaller one is wrapped.
+- **Flush.** `File.flush` writes out every layer: the handle's buffer, then the buffer of the handle
+  under it, down to the OS. So after `File.flush(out)` everything written to `out` has been handed
+  to the OS, however `out` was built. Go's `Flush` writes one layer only, and a request flushed from
+  an outer `bufio.Writer` into an inner one is never sent; a `File.Handle` is a closed set of kinds,
+  so Ant can promise the whole way down.
 - **Exit.** A buffered handle that is neither flushed nor closed when the run ends loses what its
   buffer holds, as a Go program that returns from `main` without `Flush` does. The spec says so next
   to `File.buffered`.
 - **Reads.** A read of the new handle reads `f`, through `f`'s one read buffer. A buffered
   connection can still `readLine` its replies, after `File.flush`, as with Go's `bufio.ReadWriter`.
-- **Errors.** The first error from writing the buffer out is kept. Every later write, flush and
-  close of the buffered handle returns it, as Go's `bufio.Writer` does.
+- **Errors.** The first error from writing the buffer out is kept. Every later write and flush of
+  the buffered handle returns it, as Go's `bufio.Writer` does, and so does the first close.
 - **Close.** `File.close` of the buffered handle writes the buffer out and closes `f`, and reports
-  the first error of the two. So one close serves both, and a written file is checked as it is
-  today: `try File.close(out)`. On a standard stream the close writes out and leaves the stream
-  open, as a close of a standard stream does nothing today. A close after the first does nothing and
-  is `Ok`.
+  the first error of the two, the kept error included. So one close serves both, and a written file
+  is checked as it is today: `try File.close(out)`. On a standard stream the close writes out and
+  leaves the stream open, as a close of a standard stream does nothing today. A close after the
+  first does nothing and is `Ok`, as for every handle; a write after it is `Err`, since the handle
+  is closed.
+- **Close while a write waits.** A close must still end a write in progress, as `File.close` from
+  any goroutine does today. So when a write or flush of the buffered handle is in progress on
+  another goroutine, as when it waits on a peer that stopped reading, `File.close` does not write
+  the buffer out: it closes `f` at once, the waiting write ends with `Err`, and what the buffer
+  holds is lost. Otherwise the close would wait behind the write it is meant to end.
 - **Goroutines.** One goroutine may write the buffered handle while another reads it, as with any
   handle.
 - **Writing past the buffer.** A write to `f` directly, or a `print` while
@@ -273,7 +292,8 @@ For a whole file, building the text and writing it once is simpler still and as 
 
 - Add `File.buffered` to the listing. Reword the `File.flush` and `File.close` comments as above.
 - Replace "A write to a connection is flushed as a write to a standard stream is …; `File.flush` is
-  for files" with: a write is one write to the OS, and `File.pipe` writes each chunk it reads.
+  for files" with: a write is handed to the OS before it returns, all of it or `Err`, and
+  `File.pipe` writes each chunk it reads.
 - Narrow the close paragraph ("A write to a file can succeed into the buffer …") to buffered
   handles. A close of a written file is still checked, since a close can fail, but the reason given
   is the close itself.
@@ -302,6 +322,8 @@ For a whole file, building the text and writing it once is simpler still and as 
 - `print`: drop "output is buffered and flushed when the program reads standard input, blocks, or
   exits".
 - `eprint`/`eprintln`: drop "which is not buffered, and flush standard output first".
+- `print` and the rest: add that a failed write is ignored, and a broken pipe on standard output or
+  standard error ends the program as SIGPIPE does.
 
 `ant-lang.md`, `defer`:
 
@@ -393,6 +415,18 @@ and rules.
   saves nothing measurable. A program that needs more passes `size`.
 - **A handle already buffered** is returned as it is when its buffer is large enough, as Go's
   `bufio.NewWriterSize` does.
+- **`File.flush` goes the whole way down**, through every buffered layer, unlike Go's `Flush`. With
+  one layer only, a request flushed from an 8 KB buffer into a 4 KB one waits there, and the read of
+  the reply never returns. The alternative, never nesting (`File.buffered` of a buffered handle
+  returns it whatever its size), was declined to keep Go's size rule.
+- **A close ends a write in progress**, buffered handle or not. A buffered handle with a write or
+  flush in progress on another goroutine is closed without writing its buffer out, which is lost.
+- **A write promises delivery, not a count of system calls.** All of its bytes reach the OS before
+  it returns, or it is `Err`.
+- **`print` failures, as in Go.** Ignored, except a broken pipe on standard output or standard
+  error, which ends the program as SIGPIPE does. `File.writeLine(Os.stdout(), …)` reports errors.
+- **Closing twice.** The kept error is returned by later writes, flushes and the first close. A
+  close after the first is `Ok`, as for every handle.
 - **Name: `File.buffered(f)`.** It lives with the other functions on a handle. Considered and
   rejected:
   - `Bufio.writer(f)`, after Go's package. Ant's namespaces are named for the type they work on, and
