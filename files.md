@@ -11,16 +11,16 @@ Close the gaps a shell script meets when ported to Ant's `File` and `Os` namespa
   `0o700`. Both take a pattern and a directory.
 - **Modes.** `File.chmod`, and `mode` in `File.Info`. New files and directories follow the umask as
   the shell's do.
-- **Copies.** `File.copy` for one file and `File.copyAll` for a tree.
+- **Copies.** `File.copy` for one file and `File.copyAll` for a tree, which may land in an empty
+  directory but never merges.
 - **Symbolic links.** `File.symlink`, `File.readLink`, `File.realPath`, `stat` that can stop at a
   link, and `isSymlink` in `File.Info`. Every existing function says what it does with a link.
 - **Times.** `File.touch`.
-- **The process.** `Os.pid`, `Os.uid`, `Os.home`, `Os.hostname`.
+- **The process.** `Os.pid`, `Os.uid`, `Os.home`, `Os.hostname`, and `Os.configDir` and
+  `Os.cacheDir` for where a script keeps its files. `File.isTerminal` for `[[ -t 1 ]]`.
 - **Locks.** `File.lock` and `File.tryLock` take a lock file by path, so only one copy of a script
   runs. The kernel releases the lock when the process dies.
-- **No exclusive creation yet.** Go's `O_EXCL` is recorded as a later `replace: false` parameter.
-- **Open:** `copyAll` onto an existing empty directory, and `Os.configDir`, `Os.cacheDir` and
-  `File.isTerminal`.
+- **No exclusive creation.** With locks, Go's `O_EXCL` has no use left that a script needs.
 
 ```ant
 // On Unix, a secret is never readable by others, not even for a moment.
@@ -397,14 +397,14 @@ Os.hostname(): Result[string, Error]
 decides what the process may touch, so `Os.uid() == 0` is `[[ $EUID -eq 0 ]]`. On Windows it is null
 rather than Go's −1, so the type says that the answer can be missing.
 
-### `copyAll` onto an existing directory (open)
+### `copyAll` onto an existing directory
 
-Three choices, from the prior art:
+`copyAll` accepts an empty directory at `to`. The three choices, from the prior art:
 
 - **Refuse any existing `to`.** This is the simplest rule. A program that has just made `dir` copies
   to `Path.join([dir, "src"])`, or removes `dir` first.
-- **Accept an empty directory (recommended).** An existing directory with no entries is used as the
-  root of the copy. Since it is empty, the result is the tree a fresh `to` would get, so nothing is
+- **Accept an empty directory (chosen).** An existing directory with no entries is used as the root
+  of the copy. Since it is empty, the result is the tree a fresh `to` would get, so nothing is
   merged and nothing is lost. The directory keeps its own mode, so a `tempDir` stays `0o700` instead
   of taking the source's `0o755`. A directory with any entry, a file, or a link at `to` is `Err`
   before anything is copied. A file at `from` still needs a `to` that does not exist.
@@ -414,11 +414,17 @@ Three choices, from the prior art:
 
 "Into", as `cp -R` does it, is rejected for the reason `copy` has no "into" form.
 
-### More of the process (open)
+### Where a script keeps its files, and terminals
 
-Each candidate, with what it is for and a recommendation:
+```
+Os.configDir(): Result[string, Error]    // $XDG_CONFIG_HOME or ~/.config; ~/Library/Application Support; %AppData%
+Os.cacheDir(): Result[string, Error]     // $XDG_CACHE_HOME or ~/.cache; ~/Library/Caches; %LocalAppData%
+File.isTerminal(f: File.Handle): bool    // [[ -t 1 ]] is File.isTerminal(Os.stdout())
+```
 
-| Candidate                         | Shell                           | Prior art                                                                                               | Recommendation            |
+The candidates that were weighed, and what was decided:
+
+| Candidate                         | Shell                           | Prior art                                                                                               | Decision                  |
 | --------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------- |
 | `Os.configDir()`, `Os.cacheDir()` | `${XDG_CONFIG_HOME:-~/.config}` | Go `os.UserConfigDir`, `UserCacheDir`; Python `platformdirs`, Rust `dirs`, Node `env-paths` as packages | **add**                   |
 | `File.isTerminal(f)`              | `[[ -t 1 ]]`                    | Rust `IsTerminal` (1.70), Deno `isTerminal()`, Node `isTTY`, Python `isatty()`; Go only in `x/term`     | **add**                   |
@@ -552,22 +558,22 @@ This is the one part of the proposal that goes beyond Go's standard library, whi
 no portable lock. Ant carries a small implementation of its own, as `gofrs/flock` and `lockedfile`
 do.
 
-### Exclusive creation later: `replace: false`
+### No exclusive creation
 
-Ant does not add `O_EXCL` now. When a script needs "create unless it exists" to be atomic against a
-writer that does not take a lock, it becomes a parameter, not a new function:
+With locks, Ant does not need `O_EXCL`:
 
-```
-File.write(path: string, text: string, replace: bool = true): Result[void, Error]
-File.writeBytes(path: string, bytes: Bytes, replace: bool = true): Result[void, Error]
-File.create(path: string, replace: bool = true): Result[File.Handle, Error]
-File.copy(from: string, to: string, replace: bool = true): Result[void, Error]
-```
+- **Single instance** is the lock's job, and exclusive creation cannot do it, since a crash leaves
+  the file.
+- **A unique name** is `tempFile`'s job, and it already creates with `O_EXCL`, so a link planted in
+  `/tmp` cannot redirect it.
+- **"Create unless it exists"** between Ant programs is atomic under a lock: take `tryLock`, check
+  `File.exists`, write, close.
 
-`replace: false` is `O_CREATE|O_EXCL`: `Err` with Go's message, `open out.txt: file exists`, when
-anything is at the path, a dangling link included. Adding it later breaks nothing, since a named
-parameter with a default is additive. Until then, `File.exists` and then `write` does the same
-thing, except under a concurrent writer.
+What is left is "create unless it exists" against a program that takes no lock, such as another tool
+writing the same path at the same moment. Without a lock, `File.exists` and then `write` can lose
+that race. Scripts almost never meet it. If one does, Go's flag can be added as a
+`replace: bool = true` parameter on `write`, `writeBytes`, `create` and `copy`, which breaks
+nothing, since a named parameter with a default is additive. It is not planned.
 
 ## Considered and rejected
 
@@ -584,7 +590,9 @@ thing, except under a concurrent writer.
   thing whatever is on disk.
 - **Copying times by default.** Nobody does that, and a fresh `modified` is what makes a build tool
   see the copy.
-- **`File.createNew`** next to `File.create`: two names for one operation that differ in a flag.
+- **Exclusive creation,** as `File.createNew` or a `replace: false` parameter. Locks and `tempFile`
+  cover its uses, see No exclusive creation. `createNew` next to `create` would also be two names
+  for one operation that differ in a flag.
 - **Go's `File.openFile(path, flags, mode)`.** Ant would need flag constants and `Bits.or`, and most
   combinations mean nothing without seeking. One function per intent is Ant's way.
 - **A pid file made with exclusive creation** for single instance. A crash leaves the file, and
@@ -604,7 +612,7 @@ thing, except under a concurrent writer.
   temporary files, copies, links (the table above) and times. `tempDir` gains `pattern` and `dir`.
 - `stdlib.md`, Os: `pid`, `uid`, `home`, `hostname`.
 - `stdlib.md`, File: `lock` and `tryLock`, with a paragraph on their semantics.
-- Whatever the open questions settle: `configDir`, `cacheDir`, `isTerminal`.
+- `stdlib.md`: `Os.configDir`, `Os.cacheDir`, `File.isTerminal`.
 - `fmt.md`: none. Number literals are printed as written.
 
 Implementation, beyond the spec: the lexer, `internal/lib/file.go` and `os.go`, `prelude.d.ant`
@@ -616,7 +624,6 @@ intellij-ant), the Monaco language in ant-web, and nvim-ant's syntax.
 - Globbing (`*.txt`). It has its own entry in `ant/TODO.md`.
 - Owners and groups: `chown`, and `uid` and `gid` in `File.Info`.
 - Hard links, ACLs, extended attributes, Windows file attributes beyond read-only.
-- Exclusive creation, until a script needs it as `replace: false`.
 - Kinds on library errors, except as a follow-up proposal.
 - A rename that refuses to replace.
 
@@ -637,11 +644,13 @@ From the review of 2026-11-01:
 11. Globbing goes to `ant/TODO.md`.
 12. `File.touch(path, time)`, not a setter that requires the file.
 13. `Os.pid`, `Os.uid`, `Os.home` and `Os.hostname`.
-14. Single instance through `File.lock` and `File.tryLock` by path, released by `close`. No
-    `createNew`, and no exclusive creation now; `replace: false` is the recorded way to add it.
+14. Single instance through `File.lock` and `File.tryLock` by path, released by `close`.
+15. No exclusive creation: no `createNew` and no `replace: false`. Locks and `tempFile` cover it.
+16. `copyAll` accepts an existing empty directory at `to` and keeps that directory's mode. It never
+    merges.
+17. `Os.configDir`, `Os.cacheDir` and `File.isTerminal`. No user name, temporary directory path,
+    `gid`, `setenv` or `chdir`.
 
 ## Open questions
 
-1. `copyAll` onto an existing directory. Recommended: accept an empty one and keep its mode.
-2. More of the process. Recommended: add `Os.configDir`, `Os.cacheDir` and `File.isTerminal`, and
-   nothing else.
+None. Every question raised in review is settled under Decisions.
