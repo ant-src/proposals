@@ -20,11 +20,11 @@ Close the gaps a shell script meets when ported to Ant's `File` and `Os` namespa
   onto an existing empty directory, and `Os.configDir`, `Os.cacheDir` and `File.isTerminal`.
 
 ```ant
-// A secret is never readable by others, not even for a moment.
+// On Unix, a secret is never readable by others, not even for a moment.
 var tmp = try File.tempFile(".token-*", dir: Path.dir(path))
 defer { File.remove(tmp) }      // Err after the rename, and discarded
 try File.write(tmp, token)      // still 0o600: a write keeps an existing file's mode
-try File.rename(tmp, path)      // atomic: readers see the old file or the new one
+try File.rename(tmp, path)      // atomic on Unix: readers see the old file or the new one
 
 try File.chmod("deploy.ant", 0o755)
 var info = try File.stat("deploy.ant")
@@ -274,6 +274,12 @@ File.chmod(path: string, mode: int): Result[void, Error]   // follows a link
   which is the mistake the prior art shows. A file that must never be readable by others is written
   as a temporary file in the same directory and renamed, as in the Summary. A mode that may be
   briefly wider is `write` followed by `chmod`.
+- **The guarantees are Go's, and so Unix's.** `0o600` keeps a file private on Unix. On Windows modes
+  do not control access at all; an access control list does, and a new file inherits its
+  directory's. Like Go's `os.CreateTemp`, Ant sets no ACL. The default `%TEMP%`, under the user's
+  profile, is private to the user, so a `tempFile` there is too. A `tempFile` made elsewhere is as
+  private as that directory. `rename` replaces the target atomically on Unix. Go's `os.Rename`
+  promises no atomicity on other systems, even within one directory, and neither does Ant.
 - **On Windows**, only the read-only attribute exists. `stat` gives a file `0o444` when it is
   read-only and `0o666` otherwise, and a directory has `0o111` added. `chmod` sets the read-only
   attribute when `0o200` is clear and ignores the other bits. These are Go's rules.
@@ -311,8 +317,17 @@ File.copyAll(from: string, to: string): Result[void, Error]   // a file or a tre
 - `copy` copies one file's contents and sets the copy's mode to the source's. It replaces `to` when
   `to` is a file, as `write` and `rename` do, and is `Err` when `to` is a directory: there is no
   "into" form, so `Path.join` says where. A link at `from` is followed, so the target's contents are
-  copied, as `cp` does. Times are not copied. The copy is not atomic: a reader can see `to`
-  half-written, and copying to a temporary file and renaming it fixes that.
+  copied, as `cp` does. A link at `to` is followed too, as `write` follows it and as Go's
+  `os.OpenFile(to, O_TRUNC)` does: the link's target is replaced and gets the mode, and a dangling
+  link's target is created. To replace the link itself, `remove` it first. Times are not copied. The
+  copy is not atomic: a reader can see `to` half-written, and copying to a temporary file and
+  renaming it fixes that.
+- **Never onto itself.** Copying a file over itself would truncate the source before reading it. So
+  `copy` is `Err` before anything changes when `from` and `to` are the same file, which is decided
+  by identity (device and inode, as Go's `os.SameFile`), not by text. That catches
+  `copy("a", "./a")` and a link at `to` that points at `from`. `copyAll` is `Err` in the same way.
+  It is also `Err` when `to`, with its links resolved, lies inside `from`, as
+  `copyAll("src", "src/backup")` does, since the copy would copy itself.
 - `copyAll` is the recursive form, named like `removeAll` so the bigger operation has the longer
   name. It is `Err` when `to` exists, unless `to` is an empty directory (see below), so two trees
   are never merged by accident. Directories and files keep their modes. A link inside the tree is
@@ -343,16 +358,16 @@ File.stat(path: string, follow: bool = true): Result[File.Info, Error]
 
 What the existing functions do with a link:
 
-| Function                                                                       | At a link                                                                   |
-| ------------------------------------------------------------------------------ | --------------------------------------------------------------------------- |
-| `read`, `write`, `open`, `create`, `append`, `chmod`, `touch`, `copy`'s source | follow it                                                                   |
-| `exists`                                                                       | follows it, so a dangling link is `false`; `stat(p, follow: false)` sees it |
-| `stat`                                                                         | follows it unless `follow: false`                                           |
-| `remove`, `rename`                                                             | act on the link, not the target                                             |
-| `removeAll`                                                                    | removes the link, never what it points at                                   |
-| `list`                                                                         | lists the link's name                                                       |
-| `walk`                                                                         | does not descend through it; reports it as a file                           |
-| `copyAll`                                                                      | recreates it inside the tree; follows it at the root                        |
+| Function                                                                           | At a link                                                                   |
+| ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `read`, `write`, `open`, `create`, `append`, `chmod`, `touch`, both ends of `copy` | follow it                                                                   |
+| `exists`                                                                           | follows it, so a dangling link is `false`; `stat(p, follow: false)` sees it |
+| `stat`                                                                             | follows it unless `follow: false`                                           |
+| `remove`, `rename`                                                                 | act on the link, not the target                                             |
+| `removeAll`                                                                        | removes the link, never what it points at                                   |
+| `list`                                                                             | lists the link's name                                                       |
+| `walk`                                                                             | does not descend through it; reports it as a file                           |
+| `copyAll`                                                                          | recreates it inside the tree; follows it at the root                        |
 
 ### Times
 
@@ -513,11 +528,11 @@ depend on it.
 ```
 File.lock(f: File.Handle, shared: bool = false, ctx: Context | null = null): Result[void, Error]   // waits
 File.tryLock(f: File.Handle, shared: bool = false): Result[bool, Error]                             // false when another holds it
-File.unlock(f: File.Handle): Result[void, Error]
 ```
 
 ```ant
-var f = try File.append("app.lock")   // created if missing, never truncated
+try File.touch("app.lock")            // created if missing, never truncated
+var f = try File.open("app.lock")     // a read handle can be locked, on Windows too
 if !(try File.tryLock(f)) {
   eprintln("already running")
   Os.exit(1)
@@ -528,9 +543,19 @@ if !(try File.tryLock(f)) {
 The semantics are Rust's: `flock` on Unix and `LockFileEx` on Windows, the whole file, and the lock
 belongs to the handle. A second handle on the same file conflicts with the first, even in the same
 process, so it also works between goroutines. Closing the handle releases the lock, and the kernel
-releases it when the process dies, so nothing is left stale. The lock is advisory on Unix and
-mandatory on Windows, and the spec says both. A context ends a wait in `lock`. Since `flock` cannot
-be interrupted, the implementation retries the non-blocking form.
+releases it when the process dies, so nothing is left stale.
+
+There is no `unlock`. Writes to a handle are buffered (File), so an `unlock` before `close` could
+release the lock while the data is still in the buffer, and another process would then write over
+it. The lock lasts until `File.close`, which flushes first and reports what the flush reports. A
+handle from `append` cannot be locked: Go opens it with append-only access on Windows, and
+`LockFileEx` needs read or write access, as Rust's documentation warns. A handle from `open`,
+`create` or `createNew` can.
+
+D is the one part of this proposal that goes beyond Go's standard library. Go has `O_EXCL` but no
+portable lock: `syscall.Flock` on Unix and the private `cmd/go/internal/lockedfile`. The lock is
+advisory on Unix and mandatory on Windows, and the spec says both. A context ends a wait in `lock`.
+Since `flock` cannot be interrupted, the implementation retries the non-blocking form.
 
 **E. A rename that refuses to replace,** for publishing a finished file and for secrets:
 `File.rename(from, to, replace: false)`, `Err` or `Ok(false)` when `to` exists. It is
@@ -606,7 +631,7 @@ From the review of 2026-11-01:
 ## Open questions
 
 1. Exclusive creation and locks: which of A to E. Recommended: B (`File.createNew`) and D
-   (`File.lock`, `tryLock`, `unlock`).
+   (`File.lock`, `tryLock`; released by `close`). D goes beyond Go's standard library.
 2. `copyAll` onto an existing directory. Recommended: accept an empty one and keep its mode.
 3. More of the process. Recommended: add `Os.configDir`, `Os.cacheDir` and `File.isTerminal`, and
    nothing else.
