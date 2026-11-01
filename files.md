@@ -16,8 +16,11 @@ Close the gaps a shell script meets when ported to Ant's `File` and `Os` namespa
   link, and `isSymlink` in `File.Info`. Every existing function says what it does with a link.
 - **Times.** `File.touch`.
 - **The process.** `Os.pid`, `Os.uid`, `Os.home`, `Os.hostname`.
-- **Open:** exclusive creation and locks (recommended: `File.createNew` and `File.lock`), `copyAll`
-  onto an existing empty directory, and `Os.configDir`, `Os.cacheDir` and `File.isTerminal`.
+- **Locks.** `File.lock` and `File.tryLock` take a lock file by path, so only one copy of a script
+  runs. The kernel releases the lock when the process dies.
+- **No exclusive creation yet.** Go's `O_EXCL` is recorded as a later `replace: false` parameter.
+- **Open:** `copyAll` onto an existing empty directory, and `Os.configDir`, `Os.cacheDir` and
+  `File.isTerminal`.
 
 ```ant
 // On Unix, a secret is never readable by others, not even for a moment.
@@ -449,127 +452,122 @@ Each candidate, with what it is for and a recommendation:
   `env` and `dir` for a child, and `ant test` rejected `Test.setenv` and `Test.chdir` for the same
   reason.
 
-## Exclusive creation (open)
+## Locks and exclusive creation
 
-Ant has no atomic "create unless it exists" today. `write`, `create` and `rename` replace, and
-`mkdir` is `Ok` when the directory exists, so the shell's `mkdir lock` idiom does not work either.
+### The problem
 
-### What it is for
+The problem is **single instance**: only one copy of a script may run at a time. Think of a cron job
+that fires while the last run is still going, a deploy started twice, or a backup that must not
+overlap itself. The shell's answer is a pid file:
 
-| Use                                         | Needs                                         | `O_EXCL` enough?                                     |
-| ------------------------------------------- | --------------------------------------------- | ---------------------------------------------------- |
-| claim a name: `out-1.txt`, `out-2.txt`, ... | atomic create                                 | yes                                                  |
-| never clobber: refuse to overwrite output   | atomic create                                 | yes                                                  |
-| initialize once: write a config if absent   | atomic create, ideally the whole file at once | mostly                                               |
-| single instance: a pid or lock file         | survives nothing: freed when the process dies | **no**: a crash leaves it                            |
-| publish a finished file under a free name   | whole file, atomic, no replace                | **no**: readers see it empty                         |
-| a secret, created exclusively               | exclusive, and never readable by others       | **no**: another process can open it before a `chmod` |
-
-So exclusive creation covers the first three uses. Single instance needs a lock. Publishing and
-secrets need a rename that will not replace.
-
-### How Ant reports "exists"
-
-Ant's library errors are a message only, and section 8 says that an error code branches on should be
-a type of its own. The library already handles expected outcomes another way: it puts them in the
-`Ok` value. `File.readLine` is `Ok(null)` at the end of the file, and `Os.which` and `Os.env` are
-null when there is nothing. A path that is taken is the same kind of outcome. It is the case the
-program asked about, not a failure.
-
-### Options
-
-**A. A named parameter.** `exclusive: bool = false` on `write`, `writeBytes` and `create`.
-
-```ant
-var written = File.write("out.txt", report, exclusive: true)
-if written is Err {
-  if File.exists("out.txt") {
-    eprintln("out.txt exists")
-    Os.exit(1)
-  }
-  return written
-}
+```sh
+[ -e /tmp/app.lock ] && { echo "already running"; exit 1; }
+echo $$ > /tmp/app.lock
+trap 'rm -f /tmp/app.lock' EXIT
 ```
 
-This is one parameter, the spelling Deno, Rust and Node use as an option. But a parameter cannot
-change the result's type, so "exists" is an `Err` that the program tells apart with a second check.
-That check races, though harmlessly: a file that vanished in between means trying again.
+This has two bugs. Two copies can both see no file and both go on, which is a race. And a crash, a
+`kill -9` or a power cut leaves the file behind, so every later run refuses to start until someone
+removes it. Exclusive creation (`O_EXCL`) fixes the race but not the stale file. Only a kernel lock,
+which the system releases when the process dies however it dies, fixes both. That is `flock` on Unix
+and `LockFileEx` on Windows. The shell's `flock(1)` is Linux-only.
 
-**B. `File.createNew`, whose result says it.**
+Other uses of exclusive creation are already covered or are minor:
+
+| Use                                         | Covered by                                                         |
+| ------------------------------------------- | ------------------------------------------------------------------ |
+| a unique name for a scratch file            | `tempFile`, which creates with `O_EXCL`                            |
+| single instance                             | **locks**, below                                                   |
+| never clobber output (`cp -n`, `noclobber`) | `File.exists`, then `write`; racy only against a concurrent writer |
+| write a default config once                 | the same; between Ant programs, under a lock it is atomic          |
+| publish a finished file under a free name   | not covered; Go has no non-replacing rename either                 |
+
+### How Go does it
+
+Exclusive creation is a flag: `os.OpenFile(path, O_CREATE|O_EXCL|O_WRONLY, perm)`, and
+`errors.Is(err, fs.ErrExist)`. Locks are not in the standard library. Programs use `syscall.Flock`,
+which is Unix only, with `LockFileEx` from `golang.org/x/sys/windows` beside it, or the
+`github.com/gofrs/flock` package (`New(path)`, `TryLock`, `Lock`, `TryLockContext`, `Unlock`). The
+`go` command keeps its own portable lock in `cmd/go/internal/lockedfile`, which other programs
+cannot import.
+
+Ant has no flags. It has a function for each combination of Go's flags that a program needs:
+
+| Go                                       | Ant                                                  |
+| ---------------------------------------- | ---------------------------------------------------- |
+| `os.Open`: `O_RDONLY`                    | `File.open`                                          |
+| `os.Create`: `O_RDWR\|O_CREATE\|O_TRUNC` | `File.create`                                        |
+| `O_WRONLY\|O_CREATE\|O_APPEND`           | `File.append`                                        |
+| `os.WriteFile`, `os.ReadFile`            | `File.write`, `File.read`, and the `Bytes` forms     |
+| `O_CREATE\|O_EXCL`                       | `File.tempFile` only; see below                      |
+| `O_RDWR` without truncation              | none: without seeking there is nothing to do with it |
+| `O_WRONLY` without `O_CREATE`            | none: `File.exists` first                            |
+| `O_SYNC`                                 | none                                                 |
+
+### Locks
 
 ```
-File.createNew(path: string): Result[File.Handle | null, Error]   // null when anything is at path
-```
-
-```ant
-var f = try File.createNew("out.txt")
-if f == null {
-  eprintln("out.txt exists")
-  Os.exit(1)
-}
-try File.writeText(f, report)
-try File.close(f)
-```
-
-The type carries the case the program must handle, as `readLine` does, and no second check is
-needed. A link at `path` counts as taken, even a dangling one, as `O_EXCL` has it. The file is
-created as `create` creates one: `0o666` less the umask. Writing a whole file exclusively is
-`createNew`, `writeText`, `close`. A `writeNew(path, text): Result[bool, Error]` could be added
-later if that turns out to be common.
-
-**C. Kinds on library errors.** For example, `Error` gains `kind: string`, or `File`'s errors become
-a union with `File.Exists`, `File.NotFound` and `File.Denied`. This would also answer "not found"
-for every `File` call. But it changes the error type of every namespace, touches section 8, and goes
-against the rule that the library's `Error` is text. It deserves its own proposal, and B does not
-depend on it.
-
-**D. Locks, for the single-instance use.**
-
-```
-File.lock(f: File.Handle, shared: bool = false, ctx: Context | null = null): Result[void, Error]   // waits
-File.tryLock(f: File.Handle, shared: bool = false): Result[bool, Error]                             // false when another holds it
+File.lock(path: string, ctx: Context | null = null): Result[File.Handle, Error]   // waits for the lock
+File.tryLock(path: string): Result[File.Handle | null, Error]                     // null when another holds it
 ```
 
 ```ant
-try File.touch("app.lock")            // created if missing, never truncated
-var f = try File.open("app.lock")     // a read handle can be locked, on Windows too
-if !(try File.tryLock(f)) {
+var lock = try File.tryLock("app.lock")
+if lock == null {
   eprintln("already running")
   Os.exit(1)
 }
-// the lock is held until f is closed or the process ends, however it ends
+// the lock is held until File.close(lock) or the end of the process, however it ends
 ```
 
-The semantics are Rust's: `flock` on Unix and `LockFileEx` on Windows, the whole file, and the lock
-belongs to the handle. A second handle on the same file conflicts with the first, even in the same
-process, so it also works between goroutines. Closing the handle releases the lock, and the kernel
-releases it when the process dies, so nothing is left stale.
+- **One call** creates the file when it is missing (`0o666` less the umask, as `create`), never
+  truncates it, opens it for reading and writing, and takes an exclusive lock on the whole file. It
+  is what Go needs `OpenFile`, `Flock` and a Windows branch for, and what `gofrs/flock`'s `TryLock`
+  is. Opening the file read-write sidesteps Windows' rule that `LockFileEx` needs read or write
+  access, which an append-only handle lacks.
+- **Held is `null`, not `Err`.** Another process holding the lock is the answer the program asked
+  for, as the end of the file is for `readLine`. `Err` is for a real failure, such as a directory
+  that cannot be written.
+- **`lock` waits** until the lock is free or the context is done, and then the result is `Err` with
+  the context's reason. `flock` cannot be interrupted, so the implementation retries the
+  non-blocking form, as `TryLockContext` does.
+- **Released by `File.close`** or by the end of the process. There is no `unlock`: writes to a
+  handle are buffered (File), so an unlock before the close could release the lock while data is
+  still in the buffer, and another process would then write over it. `close` flushes first and
+  reports what the flush reports.
+- **The lock belongs to the handle,** with `flock`'s semantics, not `fcntl`'s, which a process loses
+  when any of its descriptors for the file is closed. A second `lock` of the same path waits for the
+  first, even in the same process, so a lock also orders goroutines.
+- **The handle reads and writes,** so a program may record its pid in the lock file. A shorter pid
+  can leave old digits behind, since the file is not truncated. Nobody should read the pid to decide
+  whether the lock is held; that is what `tryLock` answers.
+- **Advisory on Unix,** so it keeps out only programs that also take the lock. **Mandatory on
+  Windows,** where other processes cannot read or write the file while it is locked. The spec says
+  both.
+- **The lock file stays** after the close. Removing it would race with a process that has just
+  opened it and is about to lock it, a known trap of lock files, so the file is left in place and
+  reused.
 
-There is no `unlock`. Writes to a handle are buffered (File), so an `unlock` before `close` could
-release the lock while the data is still in the buffer, and another process would then write over
-it. The lock lasts until `File.close`, which flushes first and reports what the flush reports. A
-handle from `append` cannot be locked: Go opens it with append-only access on Windows, and
-`LockFileEx` needs read or write access, as Rust's documentation warns. A handle from `open`,
-`create` or `createNew` can.
+This is the one part of the proposal that goes beyond Go's standard library, which has `O_EXCL` but
+no portable lock. Ant carries a small implementation of its own, as `gofrs/flock` and `lockedfile`
+do.
 
-D is the one part of this proposal that goes beyond Go's standard library. Go has `O_EXCL` but no
-portable lock: `syscall.Flock` on Unix and the private `cmd/go/internal/lockedfile`. The lock is
-advisory on Unix and mandatory on Windows, and the spec says both. A context ends a wait in `lock`.
-Since `flock` cannot be interrupted, the implementation retries the non-blocking form.
+### Exclusive creation later: `replace: false`
 
-**E. A rename that refuses to replace,** for publishing a finished file and for secrets:
-`File.rename(from, to, replace: false)`, `Err` or `Ok(false)` when `to` exists. It is
-`RENAME_NOREPLACE` on Linux, `RENAME_EXCL` on macOS, `MoveFileEx` on Windows, and `link` plus
-`unlink` elsewhere. But `RENAME_NOREPLACE` is missing on some Linux file systems, the `link`
-fallback fails on FAT, and no standard library in the prior art offers it. It is worth doing only
-when someone needs it.
+Ant does not add `O_EXCL` now. When a script needs "create unless it exists" to be atomic against a
+writer that does not take a lock, it becomes a parameter, not a new function:
 
-### Recommendation
+```
+File.write(path: string, text: string, replace: bool = true): Result[void, Error]
+File.writeBytes(path: string, bytes: Bytes, replace: bool = true): Result[void, Error]
+File.create(path: string, replace: bool = true): Result[File.Handle, Error]
+File.copy(from: string, to: string, replace: bool = true): Result[void, Error]
+```
 
-**B and D**, in this proposal. B covers claiming a name, never clobbering and initializing once. D
-covers single instance, which B cannot do safely and which is the most common reason scripts reach
-for a pid file. C and E stay out: C needs its own proposal, and E is rare enough to wait for a real
-use.
+`replace: false` is `O_CREATE|O_EXCL`: `Err` with Go's message, `open out.txt: file exists`, when
+anything is at the path, a dangling link included. Adding it later breaks nothing, since a named
+parameter with a default is additive. Until then, `File.exists` and then `write` does the same
+thing, except under a concurrent writer.
 
 ## Considered and rejected
 
@@ -586,6 +584,16 @@ use.
   thing whatever is on disk.
 - **Copying times by default.** Nobody does that, and a fresh `modified` is what makes a build tool
   see the copy.
+- **`File.createNew`** next to `File.create`: two names for one operation that differ in a flag.
+- **Go's `File.openFile(path, flags, mode)`.** Ant would need flag constants and `Bits.or`, and most
+  combinations mean nothing without seeking. One function per intent is Ant's way.
+- **A pid file made with exclusive creation** for single instance. A crash leaves the file, and
+  every later run refuses to start.
+- **Kinds on library errors,** so that "exists" or "not found" could be told apart on every `File`
+  call. It changes every namespace and section 8, and needs its own proposal.
+- **A rename that refuses to replace** (`RENAME_NOREPLACE`, `RENAME_EXCL`). Go has none, it is
+  missing on some file systems, and no use has appeared.
+- **`unlock`**, see Locks. **Shared locks** can be a `shared: bool = false` parameter later.
 - **`Os.umask`.** It is process-wide, so it races with every goroutine that creates a file, and
   Windows has none. A script sets its umask in the shell that starts it, or uses `chmod`.
 
@@ -595,7 +603,8 @@ use.
 - `stdlib.md`, File: the new functions and the new `Info` fields. Paragraphs on modes and the umask,
   temporary files, copies, links (the table above) and times. `tempDir` gains `pattern` and `dir`.
 - `stdlib.md`, Os: `pid`, `uid`, `home`, `hostname`.
-- Whatever the open questions settle: `createNew`, the locks, `configDir`, `cacheDir`, `isTerminal`.
+- `stdlib.md`, File: `lock` and `tryLock`, with a paragraph on their semantics.
+- Whatever the open questions settle: `configDir`, `cacheDir`, `isTerminal`.
 - `fmt.md`: none. Number literals are printed as written.
 
 Implementation, beyond the spec: the lexer, `internal/lib/file.go` and `os.go`, `prelude.d.ant`
@@ -607,8 +616,9 @@ intellij-ant), the Monaco language in ant-web, and nvim-ant's syntax.
 - Globbing (`*.txt`). It has its own entry in `ant/TODO.md`.
 - Owners and groups: `chown`, and `uid` and `gid` in `File.Info`.
 - Hard links, ACLs, extended attributes, Windows file attributes beyond read-only.
-- Kinds on library errors (option C), except as a follow-up.
-- A rename that refuses to replace (option E), until a use appears.
+- Exclusive creation, until a script needs it as `replace: false`.
+- Kinds on library errors, except as a follow-up proposal.
+- A rename that refuses to replace.
 
 ## Decisions
 
@@ -627,11 +637,11 @@ From the review of 2026-11-01:
 11. Globbing goes to `ant/TODO.md`.
 12. `File.touch(path, time)`, not a setter that requires the file.
 13. `Os.pid`, `Os.uid`, `Os.home` and `Os.hostname`.
+14. Single instance through `File.lock` and `File.tryLock` by path, released by `close`. No
+    `createNew`, and no exclusive creation now; `replace: false` is the recorded way to add it.
 
 ## Open questions
 
-1. Exclusive creation and locks: which of A to E. Recommended: B (`File.createNew`) and D
-   (`File.lock`, `tryLock`; released by `close`). D goes beyond Go's standard library.
-2. `copyAll` onto an existing directory. Recommended: accept an empty one and keep its mode.
-3. More of the process. Recommended: add `Os.configDir`, `Os.cacheDir` and `File.isTerminal`, and
+1. `copyAll` onto an existing directory. Recommended: accept an empty one and keep its mode.
+2. More of the process. Recommended: add `Os.configDir`, `Os.cacheDir` and `File.isTerminal`, and
    nothing else.
