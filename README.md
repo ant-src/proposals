@@ -7,7 +7,7 @@ touches. Nothing here is part of the language until it is accepted and written i
 | Proposal                     | Summary                                                                                    | Status   |
 | ---------------------------- | ------------------------------------------------------------------------------------------ | -------- |
 | [assert.md](assert.md)       | `assert(cond, message?)`: always on, shows compared values, narrows                        | Draft    |
-| [writes.md](writes.md)       | Writes go straight to the OS, as in Go; `File.buffered(f)` opts in to a buffer             | Draft    |
+| [writes.md](writes.md)       | Writes go straight to the OS, as in Go; `File.buffered(f)` opts in to a buffer             | Accepted |
 | [files.md](files.md)         | Temp files, modes, `0o` literals, copies, links, `touch`, `Os.pid`/`uid`/`home`/`hostname` | Draft    |
 | [ui.md](ui.md)               | A client framework and server components on `Html`                                         | Sketch   |
 | [parallel.md](parallel.md)   | `Parallel.map`, `each`, `run` and `race`: bounded, joined fan-out                          | Draft    |

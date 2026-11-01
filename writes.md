@@ -1,6 +1,6 @@
 # Proposal: unbuffered writes and `File.buffered`
 
-2026-11-01 · Anton · Draft
+2026-11-01 · Anton · Accepted
 
 ## Summary
 
