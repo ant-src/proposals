@@ -393,12 +393,13 @@ and rules.
   saves nothing measurable. A program that needs more passes `size`.
 - **A handle already buffered** is returned as it is when its buffer is large enough, as Go's
   `bufio.NewWriterSize` does.
+- **Name: `File.buffered(f)`.** It lives with the other functions on a handle. Considered and
+  rejected:
+  - `Bufio.writer(f)`, after Go's package. Ant's namespaces are named for the type they work on, and
+    this would be a namespace of one function that returns a `File.Handle`. Go needs `bufio` for its
+    readers and scanners too; Ant has those built into `File.readLine`.
+  - `File.bufferWrites(f)` and `File.withBuffer(f)`.
 
 ## Open questions
 
-1. **Name.** `File.buffered(f)` is proposed. Considered:
-   - `Bufio.writer(f)`: Go's package name. But Ant's namespaces are named for the type they work on,
-     and it would be a namespace of one function that returns a `File.Handle`. Go needs `bufio` for
-     its readers and scanners too; Ant has those built into `File.readLine`.
-   - `File.bufferWrites(f)`: says plainly that only writes are buffered.
-   - `File.withBuffer(f)`.
+None.
