@@ -168,6 +168,8 @@ These are the costs of the proposal:
   `/dev/null`.
 - A program that writes enough for this to matter wraps its output in `File.buffered`. That is the
   same trade Go makes, and Go programs live with it.
+- In Go the gap is larger: 285 ms unbuffered against 8 ms through `bufio.Writer`, about 35×. Ant's
+  is about 7× only because the interpreter's own work per line, about 0.2 µs, is paid either way.
 
 ## Design
 
@@ -202,7 +204,7 @@ Unchanged. Each handle that reads has one read buffer, shared by all its reads.
 ### `File.buffered`
 
 ```ant
-File.buffered(f: File.Handle, size: int = 65536): File.Handle   // writes held until full, flush or close
+File.buffered(f: File.Handle, size: int = 4096): File.Handle    // writes held until full, flush or close
 File.flush(f: File.Handle): Result[void, Error]                 // writes out a buffered handle; Ok on any other
 File.close(f: File.Handle): Result[void, Error]                 // a buffered handle: writes out, then closes f
 ```
@@ -211,7 +213,14 @@ File.close(f: File.Handle): Result[void, Error]                 // a buffered ha
 
 - **Writes.** A write to the new handle goes into a buffer of `size` bytes. The buffer is written to
   `f` when a write does not fit, at `File.flush`, and at `File.close`. Nothing else writes it out:
-  no wait, no read and no exit. A `size` below 1 is `Err`.
+  no wait, no read and no exit. A `size` below 1 gives the default, as in Go's
+  `bufio.NewWriterSize`.
+- **Already buffered.** When `f` is itself a buffered handle whose buffer is at least `size`,
+  `File.buffered` returns `f`, as `bufio.NewWriterSize` returns a `*bufio.Writer` that is already
+  large enough. A smaller one is wrapped.
+- **Exit.** A buffered handle that is neither flushed nor closed when the run ends loses what its
+  buffer holds, as a Go program that returns from `main` without `Flush` does. The spec says so next
+  to `File.buffered`.
 - **Reads.** A read of the new handle reads `f`, through `f`'s one read buffer. A buffered
   connection can still `readLine` its replies, after `File.flush`, as with Go's `bufio.ReadWriter`.
 - **Errors.** The first error from writing the buffer out is kept. Every later write, flush and
@@ -374,14 +383,22 @@ and rules.
 - A buffered reader: reads are already buffered.
 - An in-memory byte builder.
 
+## Decisions
+
+- **Exit.** A buffered handle not flushed at the end of the run loses its tail, as in Go. Writing
+  every buffered handle out at exit would promise more than Go, and a run-wide list of handles is
+  the kind of machinery this proposal removes.
+- **Default size: 4096, Go's.** At about 10 bytes a line, 4 KB is about 400 lines per OS write, so
+  the write's cost per line is around 0.004 µs against the interpreter's 0.2 µs. A larger buffer
+  saves nothing measurable. A program that needs more passes `size`.
+- **A handle already buffered** is returned as it is when its buffer is large enough, as Go's
+  `bufio.NewWriterSize` does.
+
 ## Open questions
 
-1. **Exit with a buffered handle not flushed.** Go loses the buffered tail when a program returns
-   from `main` or calls `os.Exit`. Ant could write out every buffered handle at the end of the run.
-   That costs a list of buffered handles per run, and it removes a silent loss that a script is
-   likely to hit. It promises more than Go; the alternative is to say plainly that the tail is lost.
-2. **Default size.** 64 KB is proposed, the size of a pipe's buffer on Linux and macOS. Go's default
-   is 4 KB.
-3. **Name.** `File.buffered` is proposed. Alternatives: `File.bufferWrites`, `File.withBuffer`.
-4. **Nested buffering.** `File.buffered(File.buffered(f))` is allowed and harmless. Should it return
-   the inner handle instead?
+1. **Name.** `File.buffered(f)` is proposed. Considered:
+   - `Bufio.writer(f)`: Go's package name. But Ant's namespaces are named for the type they work on,
+     and it would be a namespace of one function that returns a `File.Handle`. Go needs `bufio` for
+     its readers and scanners too; Ant has those built into `File.readLine`.
+   - `File.bufferWrites(f)`: says plainly that only writes are buffered.
+   - `File.withBuffer(f)`.
