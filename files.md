@@ -1,6 +1,6 @@
 # Proposal: files, modes, links, and the process
 
-2026-11-01 · Anton · Accepted, in spec 89fd55b
+2026-11-01 · Anton · Accepted, in spec 89fd55b + 652a1a2
 
 ## Summary
 
@@ -20,7 +20,8 @@ Close the gaps a shell script meets when ported to Ant's `File` and `Os` namespa
   `Os.cacheDir` for where a script keeps its files. `File.isTerminal` for `[[ -t 1 ]]`.
 - **Locks.** `File.lock` and `File.tryLock` take a lock file by path, so only one copy of a script
   runs. The kernel releases the lock when the process dies.
-- **No exclusive creation.** With locks, Go's `O_EXCL` has no use left that a script needs.
+- **Not replacing.** `replace: false` on `write`, `writeBytes`, `create` and `copy` is Go's
+  `O_EXCL`: the file is created only when nothing is at the path.
 
 ```ant
 // On Unix, a secret is never readable by others, not even for a moment.
@@ -480,13 +481,13 @@ and `LockFileEx` on Windows. The shell's `flock(1)` is Linux-only.
 
 Other uses of exclusive creation are already covered or are minor:
 
-| Use                                         | Covered by                                                         |
-| ------------------------------------------- | ------------------------------------------------------------------ |
-| a unique name for a scratch file            | `tempFile`, which creates with `O_EXCL`                            |
-| single instance                             | **locks**, below                                                   |
-| never clobber output (`cp -n`, `noclobber`) | `File.exists`, then `write`; racy only against a concurrent writer |
-| write a default config once                 | the same; between Ant programs, under a lock it is atomic          |
-| publish a finished file under a free name   | not covered; Go has no non-replacing rename either                 |
+| Use                                         | Covered by                                         |
+| ------------------------------------------- | -------------------------------------------------- |
+| a unique name for a scratch file            | `tempFile`, which creates with `O_EXCL`            |
+| single instance                             | **locks**, below                                   |
+| never clobber output (`cp -n`, `noclobber`) | `replace: false`, below                            |
+| write a default config once                 | the same                                           |
+| publish a finished file under a free name   | not covered; Go has no non-replacing rename either |
 
 ### How Go does it
 
@@ -558,22 +559,31 @@ This is the one part of the proposal that goes beyond Go's standard library, whi
 no portable lock. Ant carries a small implementation of its own, as `gofrs/flock` and `lockedfile`
 do.
 
-### No exclusive creation
+### Not replacing: `replace: false`
 
-With locks, Ant does not need `O_EXCL`:
+Locks cover single instance, and `tempFile` covers unique names. What is left is "create unless it
+exists" against a program that takes no lock, such as another tool writing the same path at the same
+moment, where `File.exists` and then `write` can lose the race. Go's flag covers it, so it is a
+parameter, not a new function:
 
-- **Single instance** is the lock's job, and exclusive creation cannot do it, since a crash leaves
-  the file.
-- **A unique name** is `tempFile`'s job, and it already creates with `O_EXCL`, so a link planted in
-  `/tmp` cannot redirect it.
-- **"Create unless it exists"** between Ant programs is atomic under a lock: take `tryLock`, check
-  `File.exists`, write, close.
+```
+File.write(path: string, text: string, replace: bool = true): Result[void, Error]
+File.writeBytes(path: string, bytes: Bytes, replace: bool = true): Result[void, Error]
+File.create(path: string, replace: bool = true): Result[File.Handle, Error]
+File.copy(from: string, to: string, replace: bool = true): Result[void, Error]
+```
 
-What is left is "create unless it exists" against a program that takes no lock, such as another tool
-writing the same path at the same moment. Without a lock, `File.exists` and then `write` can lose
-that race. Scripts almost never meet it. If one does, Go's flag can be added as a
-`replace: bool = true` parameter on `write`, `writeBytes`, `create` and `copy`, which breaks
-nothing, since a named parameter with a default is additive. It is not planned.
+`replace: false` is `O_CREATE|O_EXCL`: `Err` with the OS's message, `open out.txt: file exists`,
+when anything is at the path, a dangling link included, which is not followed. That makes it the
+shell's `noclobber` and `cp -n`. The `Err` cannot say why, so a program that must treat "exists"
+apart checks `File.exists` after it. `append`, `copyAll`, `symlink` and `tempFile` never replace
+anyway, and `rename` has no such parameter, since Go has no non-replacing rename.
+
+**`replace`, not `exclusive`.** `exclusive` is the name of `O_EXCL`, Python's `"x"` and Node's
+`"wx"`, but in `File` it would read like the exclusive lock that `lock` takes, or a Windows sharing
+mode. `replace` says what happens, and it is the spec's own word: `write` "replaces what it held",
+`copy` and `rename` "replace a file at `to`". Java's `REPLACE_EXISTING` and the `overwrite` of C#'s
+`File.Copy` and Kotlin's `copyTo` name it the same way.
 
 ## Considered and rejected
 
@@ -590,9 +600,9 @@ nothing, since a named parameter with a default is additive. It is not planned.
   thing whatever is on disk.
 - **Copying times by default.** Nobody does that, and a fresh `modified` is what makes a build tool
   see the copy.
-- **Exclusive creation,** as `File.createNew` or a `replace: false` parameter. Locks and `tempFile`
-  cover its uses, see No exclusive creation. `createNew` next to `create` would also be two names
-  for one operation that differ in a flag.
+- **`File.createNew`** next to `File.create`: two names for one operation that differ in a flag.
+  `replace: false` is that flag.
+- **`exclusive: true`** as the parameter's name, see Not replacing.
 - **Go's `File.openFile(path, flags, mode)`.** Ant would need flag constants and `Bits.or`, and most
   combinations mean nothing without seeking. One function per intent is Ant's way.
 - **A pid file made with exclusive creation** for single instance. A crash leaves the file, and
@@ -612,6 +622,7 @@ nothing, since a named parameter with a default is additive. It is not planned.
   temporary files, copies, links (the table above) and times. `tempDir` gains `pattern` and `dir`.
 - `stdlib.md`, Os: `pid`, `uid`, `home`, `hostname`.
 - `stdlib.md`, File: `lock` and `tryLock`, with a paragraph on their semantics.
+- `stdlib.md`, File: `replace: false` on `write`, `writeBytes`, `create` and `copy`.
 - `stdlib.md`: `Os.configDir`, `Os.cacheDir`, `File.isTerminal`.
 - `fmt.md`: none. Number literals are printed as written.
 
@@ -645,7 +656,8 @@ From the review of 2026-11-01:
 12. `File.touch(path, time)`, not a setter that requires the file.
 13. `Os.pid`, `Os.uid`, `Os.home` and `Os.hostname`.
 14. Single instance through `File.lock` and `File.tryLock` by path, released by `close`.
-15. No exclusive creation: no `createNew` and no `replace: false`. Locks and `tempFile` cover it.
+15. Exclusive creation as `replace: bool = true` on `write`, `writeBytes`, `create` and `copy`; no
+    `createNew`; `replace`, not `exclusive`.
 16. `copyAll` accepts an existing empty directory at `to` and keeps that directory's mode. It never
     merges.
 17. `Os.configDir`, `Os.cacheDir` and `File.isTerminal`. No user name, temporary directory path,
