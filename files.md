@@ -1,6 +1,6 @@
 # Proposal: files, modes, links, and the process
 
-2026-11-01 · Anton · Draft
+2026-11-01 · Anton · Accepted, in spec 89fd55b
 
 ## Summary
 
@@ -537,10 +537,10 @@ if lock == null {
 - **`lock` waits** until the lock is free or the context is done, and then the result is `Err` with
   the context's reason. `flock` cannot be interrupted, so the implementation retries the
   non-blocking form, as `TryLockContext` does.
-- **Released by `File.close`** or by the end of the process. There is no `unlock`: writes to a
-  handle are buffered (File), so an unlock before the close could release the lock while data is
-  still in the buffer, and another process would then write over it. `close` flushes first and
-  reports what the flush reports.
+- **Released by `File.close`** or by the end of the process. There is no `unlock`: closing is the
+  one release, so a handle's whole life is the critical section, and a `File.buffered` over the
+  handle writes out at its close before the lock goes. An unlock before that close could release the
+  lock while buffered data is still to be written, and another process would then write over it.
 - **The lock belongs to the handle,** with `flock`'s semantics, not `fcntl`'s, which a process loses
   when any of its descriptors for the file is closed. A second `lock` of the same path waits for the
   first, even in the same process, so a lock also orders goroutines.
