@@ -16,7 +16,8 @@ Close the gaps a shell script meets when ported to Ant's `File` and `Os` namespa
   link, and `isSymlink` in `File.Info`. Every existing function says what it does with a link.
 - **Times.** `File.touch`.
 - **The process.** `Os.pid`, `Os.uid`, `Os.home`, `Os.hostname`.
-- **Exclusive creation.** Open: three options are laid out below.
+- **Open:** exclusive creation and locks (recommended: `File.createNew` and `File.lock`), `copyAll`
+  onto an existing empty directory, and `Os.configDir`, `Os.cacheDir` and `File.isTerminal`.
 
 ```ant
 // A secret is never readable by others, not even for a moment.
@@ -112,7 +113,7 @@ is the pattern that gets the mode right whether the target exists or not.
 
 | Language | One file                                               | A tree                                | Replaces the target           | Keeps                        |
 | -------- | ------------------------------------------------------ | ------------------------------------- | ----------------------------- | ---------------------------- |
-| Go       | none: `io.Copy` between two files                      | `os.CopyFS(dir, fsys)` (1.23)         | no: fails on any file         | execute bits                 |
+| Go       | none: `io.Copy` between two files                      | `os.CopyFS(dir, fsys)` (1.23)         | no: fails on an existing file | execute bits                 |
 | Python   | `shutil.copyfile`, `copy`, `copy2`; `Path.copy` (3.14) | `shutil.copytree`; `Path.copy` (3.14) | file yes, tree no             | `copy`: mode; `copy2`: times |
 | Node     | `fs.copyFile(src, dst, flags)`                         | `fs.cp(src, dst, { recursive })`      | yes, unless `COPYFILE_EXCL`   | mode; times on request       |
 | Deno     | `Deno.copyFile`                                        | none                                  | yes                           | mode                         |
@@ -122,10 +123,34 @@ is the pattern that gets the mode right whether the target exists or not.
 | Shell    | `cp`                                                   | `cp -R`                               | yes                           | mode; `-p` adds times        |
 
 Two things vary: whether the target is replaced, and what metadata travels. The scripting languages
-and the shell replace a file. Java and C# refuse unless asked. A tree is refused when it exists in
-Go and in Python's default, so two trees are never silently merged. Copying the mode is nearly
-universal. Copying times is opt-in everywhere it exists. `cp -R` recreates links as links, while
-`copytree` follows them by default.
+and the shell replace a file. Java and C# refuse unless asked. Copying the mode is nearly universal.
+Copying times is opt-in everywhere it exists. `cp -R` recreates links as links, while `copytree`
+follows them by default.
+
+### Copying a tree onto an existing directory
+
+| Tool                | `to` does not exist | `to` is an existing directory                                                    |
+| ------------------- | ------------------- | -------------------------------------------------------------------------------- |
+| `cp -R src dst`     | `dst` becomes `src` | copies **into** it, as `dst/src`; `cp -R src/. dst` copies the contents          |
+| BSD `cp -R src/`    | same                | the trailing slash copies the contents; GNU `cp` ignores it                      |
+| `rsync -a src/ dst` | same                | merges, replacing files; old files stay unless `--delete`                        |
+| Ruby `cp_r`         | same                | into, as `cp -R`                                                                 |
+| Python `copytree`   | same                | `FileExistsError`; `dirs_exist_ok=True` (3.8) merges, replacing files            |
+| Node `fs.cp`        | same                | merges; replaces files unless `force: false`, `errorOnExist: true` makes it fail |
+| Go `os.CopyFS`      | same                | merges directories; an existing file is `fs.ErrExist`, after a partial copy      |
+| Rust `fs_extra`     | same                | into, or the contents with `content_only`; `overwrite` and `skip_exist` options  |
+
+There are three behaviours. **Into** (`cp`, Ruby) changes meaning with what is on disk: the same
+command makes `dst` on the first run and `dst/src` on the second, and the trailing-slash rule
+differs between BSD and GNU. **Merge** (rsync, Node, Go, Python's opt-in) keeps files that the
+source no longer has, so the result is neither tree. Getting a real mirror needs rsync's `--delete`.
+Go's version can also stop halfway through on the first file that exists. **Refuse** (Python's
+default) is the only one where the result never depends on what was there before.
+
+The common case that refusing gets in the way of is a directory the program has just made: a
+`tempDir`, a `Test.tempDir`, or a `mkdir` for an output directory. That directory is empty, and
+copying into an empty directory gives the same tree as copying to a new path. The only difference is
+the root directory's mode.
 
 ### Exclusive creation
 
@@ -142,9 +167,39 @@ universal. Copying times is opt-in everywhere it exists. `cp -R` recreates links
 | Shell    | `set -o noclobber`, then `>`; `mkdir` as a lock       | the exit status                |
 
 `O_EXCL` also fails when the path is a symbolic link, even one whose target does not exist. That is
-why it is the safe way to create a file in a shared directory such as `/tmp`. Every language pairs
-it with an error the program can tell apart from "permission denied". Ant's `Error` is only a
-message, which is why this is the one item left open.
+why it is the safe way to create a file in a shared directory such as `/tmp`. It is atomic on local
+file systems and on NFS version 3 and later. Windows has the same thing as `CREATE_NEW`. Every
+language pairs it with an error the program can tell apart from "permission denied".
+
+Exclusive creation has a well-known limit: a file outlives the process that made it. A pid file left
+behind by a crash, a `kill -9` or a power cut makes every later run report "already running" until
+someone removes it. The usual fixes are to read the pid and check that the process is still alive,
+which races with pid reuse, or to use a lock that the kernel releases when the process dies:
+
+| Language | Advisory lock on an open file                                               | Released                    |
+| -------- | --------------------------------------------------------------------------- | --------------------------- |
+| POSIX    | `flock(fd, LOCK_EX \| LOCK_NB)`; `fcntl(F_SETLK)` for byte ranges           | on close and at exit        |
+| Rust     | `File::lock`, `lock_shared`, `try_lock`, `try_lock_shared`, `unlock` (1.89) | on close                    |
+| Deno     | `FsFile.lock(exclusive)`, `unlock`                                          | on close                    |
+| Java     | `FileChannel.lock`, `tryLock`, returning a `FileLock`                       | on release or channel close |
+| C#       | `FileStream.Lock(position, length)`; `FileShare.None` when opening          | on unlock or close          |
+| Python   | `fcntl.flock` on Unix; `msvcrt.locking` on Windows                          | on close                    |
+| Go       | none in `std`: `syscall.Flock`; `cmd/go` keeps a private `lockedfile`       | on close                    |
+| Node     | none: the `proper-lockfile` package uses `mkdir` and stale-lock timeouts    | —                           |
+| Shell    | `flock(1)` from util-linux, absent on macOS                                 | when the command ends       |
+
+Locks have subtleties of their own. `fcntl` locks belong to the process and are dropped when _any_
+descriptor for the file is closed, which is why Rust and most libraries use `flock`, whose lock
+belongs to the open file. Locks are advisory on Unix, so only programs that ask for them are kept
+out. On Windows `LockFileEx` is mandatory: other processes' reads and writes of the locked range
+fail. Linux emulates `flock` on NFS with `fcntl` locks.
+
+A third need is to publish a whole file under a name only if the name is free, so readers never see
+it half-written. `O_EXCL` cannot do this, since the file exists and is empty while it is being
+written. Linux has `renameat2(RENAME_NOREPLACE)` (3.15) and macOS `renamex_np(RENAME_EXCL)`.
+Windows' `MoveFileEx` without `MOVEFILE_REPLACE_EXISTING` refuses an existing target. The portable
+Unix trick is `link(tmp, target)`, which fails with `EEXIST`, followed by `unlink(tmp)`. No
+mainstream standard library offers it as one call.
 
 ### Setting times
 
@@ -259,10 +314,10 @@ File.copyAll(from: string, to: string): Result[void, Error]   // a file or a tre
   copied, as `cp` does. Times are not copied. The copy is not atomic: a reader can see `to`
   half-written, and copying to a temporary file and renaming it fixes that.
 - `copyAll` is the recursive form, named like `removeAll` so the bigger operation has the longer
-  name. It is `Err` when `to` exists, so two trees are never merged by accident. Directories and
-  files keep their modes. A link inside the tree is recreated as a link with the same target, as
-  `cp -R` does, which also means a cycle cannot loop. A link at `from` itself is followed. On an
-  error partway through, what was copied stays.
+  name. It is `Err` when `to` exists, unless `to` is an empty directory (see below), so two trees
+  are never merged by accident. Directories and files keep their modes. A link inside the tree is
+  recreated as a link with the same target, as `cp -R` does, which also means a cycle cannot loop. A
+  link at `from` itself is followed. On an error partway through, what was copied stays.
 - The implementation may use the file system's copy-on-write clone, `copy_file_range` or similar.
   The result is the same.
 
@@ -324,54 +379,172 @@ Os.hostname(): Result[string, Error]
 decides what the process may touch, so `Os.uid() == 0` is `[[ $EUID -eq 0 ]]`. On Windows it is null
 rather than Go's −1, so the type says that the answer can be missing.
 
+### `copyAll` onto an existing directory (open)
+
+Three choices, from the prior art:
+
+- **Refuse any existing `to`.** This is the simplest rule. A program that has just made `dir` copies
+  to `Path.join([dir, "src"])`, or removes `dir` first.
+- **Accept an empty directory (recommended).** An existing directory with no entries is used as the
+  root of the copy. Since it is empty, the result is the tree a fresh `to` would get, so nothing is
+  merged and nothing is lost. The directory keeps its own mode, so a `tempDir` stays `0o700` instead
+  of taking the source's `0o755`. A directory with any entry, a file, or a link at `to` is `Err`
+  before anything is copied. A file at `from` still needs a `to` that does not exist.
+- **Merge, as `rsync`, `fs.cp` and `dirs_exist_ok` do.** Rejected: the result is neither tree,
+  replacing files silently loses data, and stopping halfway on a conflict as Go does leaves a mix. A
+  program that wants a merge says so with a loop over `File.list(from)`.
+
+"Into", as `cp -R` does it, is rejected for the reason `copy` has no "into" form.
+
+### More of the process (open)
+
+Each candidate, with what it is for and a recommendation:
+
+| Candidate                         | Shell                           | Prior art                                                                                               | Recommendation            |
+| --------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------- |
+| `Os.configDir()`, `Os.cacheDir()` | `${XDG_CONFIG_HOME:-~/.config}` | Go `os.UserConfigDir`, `UserCacheDir`; Python `platformdirs`, Rust `dirs`, Node `env-paths` as packages | **add**                   |
+| `File.isTerminal(f)`              | `[[ -t 1 ]]`                    | Rust `IsTerminal` (1.70), Deno `isTerminal()`, Node `isTTY`, Python `isatty()`; Go only in `x/term`     | **add**                   |
+| the user name                     | `whoami`, `$USER`               | Go `os/user.Current`, Node `os.userInfo`, Python `getpass.getuser`                                      | not now: `Os.env("USER")` |
+| the temporary directory's path    | `$TMPDIR`                       | Go `os.TempDir`, Python `tempfile.gettempdir`, Node `os.tmpdir`                                         | no                        |
+| `Os.gid`, groups                  | `id -g`, `id -G`                | Go `os.Getgid`, `Getgroups`                                                                             | no                        |
+| `Os.setenv`, `Os.chdir`           | `export`, `cd`                  | everywhere                                                                                              | no                        |
+
+- **Config and cache directories.** A script that writes a token at `0o600` needs somewhere to put
+  it, and the right place differs on each system: `$XDG_CONFIG_HOME` or `~/.config` on Linux,
+  `~/Library/Application Support` and `~/Library/Caches` on macOS, `%AppData%` and `%LocalAppData%`
+  on Windows. Writing that by hand is a dozen lines that most scripts get wrong on at least one
+  system. Go's rules, as `os.UserConfigDir` and `os.UserCacheDir` implement them, are
+  `Result[string, Error]`, `Err` when `$HOME` is unset or an XDG variable holds a relative path.
+  Like Go, they return the root and the program adds its own name under it. The data and state
+  directories of the XDG spec are left out, as Go leaves them out.
+- **`File.isTerminal(f: File.Handle): bool`.** It is the check behind colours, progress bars and
+  prompts: `File.isTerminal(Os.stdout())`. It belongs to `File` because it is a question about a
+  handle, and it is false for files, pipes and connections. The runtime already makes this test for
+  `Cmd.run` and for standard input.
+- **The user name.** The honest answer needs the system's user database. Go's `os/user` uses libc
+  through cgo, and without cgo it parses `/etc/passwd`, which misses directory users such as LDAP
+  and macOS accounts. `$USER`, which is what shell scripts use, is already `Os.env("USER")`, and
+  `Os.uid()` covers the "am I root" question that most uses of `whoami` ask.
+- **The temporary directory's path.** The only safe use of a shared temporary directory is a random
+  name, which `tempFile` and `tempDir` already give. A fixed name such as `/tmp/app.sock` is open to
+  squatting and symlink attacks, and a function that hands out the path invites it. Fixed paths
+  belong in `Os.cacheDir()`.
+- **`gid`.** It is useful only with the supplementary groups and file owners, which are non-goals.
+- **`setenv` and `chdir`.** Both are process-wide state that races with every goroutine. `Cmd` takes
+  `env` and `dir` for a child, and `ant test` rejected `Test.setenv` and `Test.chdir` for the same
+  reason.
+
 ## Exclusive creation (open)
 
 Ant has no atomic "create unless it exists" today. `write`, `create` and `rename` replace, and
 `mkdir` is `Ok` when the directory exists, so the shell's `mkdir lock` idiom does not work either.
-Lock files, pid files and "never clobber the output" all need it. Three shapes:
+
+### What it is for
+
+| Use                                         | Needs                                         | `O_EXCL` enough?                                     |
+| ------------------------------------------- | --------------------------------------------- | ---------------------------------------------------- |
+| claim a name: `out-1.txt`, `out-2.txt`, ... | atomic create                                 | yes                                                  |
+| never clobber: refuse to overwrite output   | atomic create                                 | yes                                                  |
+| initialize once: write a config if absent   | atomic create, ideally the whole file at once | mostly                                               |
+| single instance: a pid or lock file         | survives nothing: freed when the process dies | **no**: a crash leaves it                            |
+| publish a finished file under a free name   | whole file, atomic, no replace                | **no**: readers see it empty                         |
+| a secret, created exclusively               | exclusive, and never readable by others       | **no**: another process can open it before a `chmod` |
+
+So exclusive creation covers the first three uses. Single instance needs a lock. Publishing and
+secrets need a rename that will not replace.
+
+### How Ant reports "exists"
+
+Ant's library errors are a message only, and section 8 says that an error code branches on should be
+a type of its own. The library already handles expected outcomes another way: it puts them in the
+`Ok` value. `File.readLine` is `Ok(null)` at the end of the file, and `Os.which` and `Os.env` are
+null when there is nothing. A path that is taken is the same kind of outcome. It is the case the
+program asked about, not a failure.
+
+### Options
 
 **A. A named parameter.** `exclusive: bool = false` on `write`, `writeBytes` and `create`.
 
 ```ant
-var written = File.write("app.pid", "${Os.pid()}", exclusive: true)
+var written = File.write("out.txt", report, exclusive: true)
 if written is Err {
-  if File.exists("app.pid") {
-    eprintln("already running")
+  if File.exists("out.txt") {
+    eprintln("out.txt exists")
     Os.exit(1)
   }
   return written
 }
 ```
 
-This is one parameter, the spelling Deno, Rust and Node use as an option. Ant's `Error` is a
-message, so the program tells "exists" from "denied" with `File.exists` after the `Err`. That check
-races, but harmlessly: a file that vanished in between means retrying.
+This is one parameter, the spelling Deno, Rust and Node use as an option. But a parameter cannot
+change the result's type, so "exists" is an `Err` that the program tells apart with a second check.
+That check races, though harmlessly: a file that vanished in between means trying again.
 
-**B. A separate function whose result says it.**
-`File.createNew(path: string): Result[File.Handle | null, Error]`, which is null when the path
-exists. The type carries the case the program must handle, with no second check. It covers `create`
-only: writing a whole file exclusively is `createNew`, `writeText`, `close`.
+**B. `File.createNew`, whose result says it.**
 
-**C. A kind on library errors.** For example, `Error` gains `kind: string`, or `File` errors become
-a union with `File.Exists`. A or B would then report it properly. This is the broader change: it
-would also give `NotFound` and `Denied` to every `File` call, and it touches section 8 and every
-namespace. It deserves its own proposal.
-
-Recommendation: **B** now. It is small, it is honest in its type, and it does not need C. The
-pid-file case reads:
+```
+File.createNew(path: string): Result[File.Handle | null, Error]   // null when anything is at path
+```
 
 ```ant
-var f = try File.createNew("app.pid")
+var f = try File.createNew("out.txt")
 if f == null {
-  eprintln("already running")
+  eprintln("out.txt exists")
   Os.exit(1)
 }
-try File.writeText(f, "${Os.pid()}")
+try File.writeText(f, report)
 try File.close(f)
 ```
 
-A real advisory lock (`flock`) that is released when the process dies is a different feature. It is
-out of scope here and goes in `ant/TODO.md` if wanted.
+The type carries the case the program must handle, as `readLine` does, and no second check is
+needed. A link at `path` counts as taken, even a dangling one, as `O_EXCL` has it. The file is
+created as `create` creates one: `0o666` less the umask. Writing a whole file exclusively is
+`createNew`, `writeText`, `close`. A `writeNew(path, text): Result[bool, Error]` could be added
+later if that turns out to be common.
+
+**C. Kinds on library errors.** For example, `Error` gains `kind: string`, or `File`'s errors become
+a union with `File.Exists`, `File.NotFound` and `File.Denied`. This would also answer "not found"
+for every `File` call. But it changes the error type of every namespace, touches section 8, and goes
+against the rule that the library's `Error` is text. It deserves its own proposal, and B does not
+depend on it.
+
+**D. Locks, for the single-instance use.**
+
+```
+File.lock(f: File.Handle, shared: bool = false, ctx: Context | null = null): Result[void, Error]   // waits
+File.tryLock(f: File.Handle, shared: bool = false): Result[bool, Error]                             // false when another holds it
+File.unlock(f: File.Handle): Result[void, Error]
+```
+
+```ant
+var f = try File.append("app.lock")   // created if missing, never truncated
+if !(try File.tryLock(f)) {
+  eprintln("already running")
+  Os.exit(1)
+}
+// the lock is held until f is closed or the process ends, however it ends
+```
+
+The semantics are Rust's: `flock` on Unix and `LockFileEx` on Windows, the whole file, and the lock
+belongs to the handle. A second handle on the same file conflicts with the first, even in the same
+process, so it also works between goroutines. Closing the handle releases the lock, and the kernel
+releases it when the process dies, so nothing is left stale. The lock is advisory on Unix and
+mandatory on Windows, and the spec says both. A context ends a wait in `lock`. Since `flock` cannot
+be interrupted, the implementation retries the non-blocking form.
+
+**E. A rename that refuses to replace,** for publishing a finished file and for secrets:
+`File.rename(from, to, replace: false)`, `Err` or `Ok(false)` when `to` exists. It is
+`RENAME_NOREPLACE` on Linux, `RENAME_EXCL` on macOS, `MoveFileEx` on Windows, and `link` plus
+`unlink` elsewhere. But `RENAME_NOREPLACE` is missing on some Linux file systems, the `link`
+fallback fails on FAT, and no standard library in the prior art offers it. It is worth doing only
+when someone needs it.
+
+### Recommendation
+
+**B and D**, in this proposal. B covers claiming a name, never clobbering and initializing once. D
+covers single instance, which B cannot do safely and which is the most common reason scripts reach
+for a pid file. C and E stay out: C needs its own proposal, and E is rare enough to wait for a real
+use.
 
 ## Considered and rejected
 
@@ -397,6 +570,7 @@ out of scope here and goes in `ant/TODO.md` if wanted.
 - `stdlib.md`, File: the new functions and the new `Info` fields. Paragraphs on modes and the umask,
   temporary files, copies, links (the table above) and times. `tempDir` gains `pattern` and `dir`.
 - `stdlib.md`, Os: `pid`, `uid`, `home`, `hostname`.
+- Whatever the open questions settle: `createNew`, the locks, `configDir`, `cacheDir`, `isTerminal`.
 - `fmt.md`: none. Number literals are printed as written.
 
 Implementation, beyond the spec: the lexer, `internal/lib/file.go` and `os.go`, `prelude.d.ant`
@@ -408,15 +582,31 @@ intellij-ant), the Monaco language in ant-web, and nvim-ant's syntax.
 - Globbing (`*.txt`). It has its own entry in `ant/TODO.md`.
 - Owners and groups: `chown`, and `uid` and `gid` in `File.Info`.
 - Hard links, ACLs, extended attributes, Windows file attributes beyond read-only.
-- Advisory locks.
 - Kinds on library errors (option C), except as a follow-up.
+- A rename that refuses to replace (option E), until a use appears.
+
+## Decisions
+
+From the review of 2026-11-01:
+
+1. `0o` octal literals.
+2. No `access()` or `writable()`. A script tries with `tempFile` instead.
+3. No mode parameter on `write` or `create`. Secrets use a temporary file and `rename`.
+4. `tempDir` promises `0o700`.
+5. `tempFile` returns the path.
+6. `mode` holds the bits in `0o7777`, and the umask applies to new files and directories.
+7. Go's rules for modes on Windows.
+8. Nothing removes temporary files for the program.
+9. `File.copy` and `File.copyAll`, as designed above.
+10. Symbolic links, as designed above.
+11. Globbing goes to `ant/TODO.md`.
+12. `File.touch(path, time)`, not a setter that requires the file.
+13. `Os.pid`, `Os.uid`, `Os.home` and `Os.hostname`.
 
 ## Open questions
 
-1. Exclusive creation: A, B or C (above). Recommended: B.
-2. `File.touch` as proposed, or a `File.setModified(path, time)` that requires the file, as Go and
-   Java have. Recommended: `touch`, the name scripts already use.
-3. Whether `copyAll` should accept an existing empty directory as `to`, as Python's `dirs_exist_ok`
-   does for any existing one.
-4. Whether the process gets more: `Os.gid`, the user name (`whoami`), and the host's temporary
-   directory as a path (`$TMPDIR`) without creating anything.
+1. Exclusive creation and locks: which of A to E. Recommended: B (`File.createNew`) and D
+   (`File.lock`, `tryLock`, `unlock`).
+2. `copyAll` onto an existing directory. Recommended: accept an empty one and keep its mode.
+3. More of the process. Recommended: add `Os.configDir`, `Os.cacheDir` and `File.isTerminal`, and
+   nothing else.
