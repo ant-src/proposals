@@ -43,18 +43,20 @@ mutable containers without adding a second set of them.
 
 ## Prior art
 
-| Approach                              | Examples                                                                                                                      | What Ant takes                                                                                                                                                                            |
-| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Read-only view in the type system     | TypeScript `readonly`, `ReadonlyArray`, `as const`; C++ `const`; Go proposals #22876, #29192, #31464 (none accepted)          | The static half only. Erased types guarantee nothing at run time, aliases still write, and `const` spreads through every signature that touches the value ("contagion")                   |
-| Freeze in place                       | JavaScript `Object.freeze`; Ruby `freeze`                                                                                     | Nothing. It is shallow, it freezes the value under every other name that holds it, and it races with a writer in another goroutine                                                        |
-| Frozen copy, same interface           | Java `List.copyOf`, `Map.copyOf` (throw on mutation); Python `tuple`, `frozenset`; .NET `ToFrozenDictionary`, `ToFrozenSet`   | The core model: a copy that is immutable, built once and read many times. Java shows the cost of runtime-only errors, so the checker catches direct writes                                |
-| Read-only interface over mutable      | Kotlin `List` vs `MutableList`; .NET `IReadOnlyList`                                                                          | Covariance. Kotlin's `List<out E>` is covariant because it has no writes, and `Frozen[Array[T]]` gets the same rule for the same reason                                                   |
-| Persistent collections                | Clojure; Scala; Immutable.js; Rust `im`, `rpds`; Kotlin `kotlinx.collections.immutable`; .NET `ImmutableDictionary`           | Not now. A second collection API breaks "one obvious way". The representation is left open so that a later proposal can add O(log n) updates (see Later)                                  |
-| Frozen value with structural equality | TC39 Records & Tuples (withdrawn April 2025), its successor Composites (Stage 1)                                              | Confirmation. JavaScript dropped new deep-immutable primitives and kept frozen objects with structural equality. Ant already has structural `==` and keys, and lacks only the frozen part |
-| Value semantics, copy on write        | Swift `Array`, `Dictionary`; Hylo and Mojo mutable value semantics                                                            | Nothing. Changing what assignment means would break section 9's sharing idioms and every program that relies on aliasing                                                                  |
-| Immutable by default                  | Elm, Gleam, Elixir, Haskell; Roc, Koka and Lean, which reuse memory in place through reference counting (Perceus, FBIP)       | Nothing. Ant is an imperative language on a garbage collector; in-place reuse needs precise reference counts that the Go and JavaScript runtimes do not have                              |
-| Declaration-level immutability        | Python `@dataclass(frozen=True)`; Kotlin `val` properties; C# `readonly record struct`, `init`; Java `record`, `final` fields | Left open (see Open questions). Shallow fields do not give the sharing guarantee, but a frozen-by-declaration type would                                                                  |
-| Capabilities for sharing              | Pony `val`, `iso`; Swift `Sendable`; Rust `Send`, `Sync` with ownership                                                       | The runtime fact that a frozen value is safe to share. Proving race freedom statically needs ownership, which Ant does not have                                                           |
+| Approach                              | Examples                                                                                                                                                                                                            | What Ant takes                                                                                                                                                                            |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Read-only view in the type system     | TypeScript `readonly`, `ReadonlyArray`, `as const`; C++ `const`; Go proposals #22876, #29192, #31464 (none accepted)                                                                                                | The static half only. Erased types guarantee nothing at run time, aliases still write, and `const` spreads through every signature that touches the value ("contagion")                   |
+| Freeze in place                       | JavaScript `Object.freeze`; Ruby `freeze`                                                                                                                                                                           | Nothing. It is shallow, it freezes the value under every other name that holds it, and it races with a writer in another goroutine                                                        |
+| Deep freeze to share between threads  | Ruby `Ractor.make_shareable` (and the open `deep_freeze`, Feature #21962); Python PEP 795 (subinterpreters, not accepted); Dart VM deeply immutable objects for isolates                                            | The purpose and the depth: a value that crosses to another thread must be immutable all the way down. Ant copies where these freeze in place                                              |
+| Frozen copy, same interface           | Java `List.copyOf`, `Map.copyOf` (throw on mutation); Python `tuple`, `frozenset`, `frozendict` (PEP 814, Python 3.15); .NET `ToFrozenDictionary`, `ToFrozenSet`                                                    | The core model: a copy that is immutable, built once and read many times. Java shows the cost of runtime-only errors, so the checker catches direct writes                                |
+| Read-only interface over mutable      | Kotlin `List` vs `MutableList`; .NET `IReadOnlyList`                                                                                                                                                                | Covariance. Kotlin's `List<out E>` is covariant because it has no writes, and `Frozen[Array[T]]` gets the same rule for the same reason                                                   |
+| Build mutable, publish frozen         | Clojure transients and `persistent!`; Immer.js `produce` (Redux Toolkit), which also freezes its result                                                                                                             | The workflow: build or edit with ordinary writes, then `freeze` once. Ant's mutable default plays the role of Clojure's transient                                                         |
+| Persistent collections                | Clojure; Scala; Immutable.js; Rust `im`, `rpds`; Kotlin `kotlinx.collections.immutable`; .NET `ImmutableDictionary`                                                                                                 | Not now. A second collection API breaks "one obvious way". The representation is left open so that a later proposal can add O(log n) updates (see Later)                                  |
+| Frozen value with structural equality | TC39 Records & Tuples (withdrawn April 2025), its successor Composites (Stage 2)                                                                                                                                    | Confirmation. JavaScript dropped new deep-immutable primitives and kept frozen objects with structural equality. Ant already has structural `==` and keys, and lacks only the frozen part |
+| Value semantics, copy on write        | Swift `Array`, `Dictionary`; Hylo and Mojo mutable value semantics                                                                                                                                                  | Nothing. Changing what assignment means would break section 9's sharing idioms and every program that relies on aliasing                                                                  |
+| Immutable by default                  | Elm, Gleam, Elixir, Haskell; Roc, Koka and Lean, which reuse memory in place through reference counting (Perceus, FBIP)                                                                                             | Nothing. Ant is an imperative language on a garbage collector; in-place reuse needs precise reference counts that the Go and JavaScript runtimes do not have                              |
+| Declaration-level immutability        | Python `@dataclass(frozen=True)`; Kotlin `val` properties; C# `readonly record struct`, `init`; Java `record`, `final` fields, value classes (JEP 401, preview); Julia `struct` (immutable unless `mutable struct`) | Left open (see Open questions). Shallow fields do not give the sharing guarantee, but a frozen-by-declaration type would                                                                  |
+| Capabilities for sharing              | Pony `val`, `iso`; Swift `Sendable`; Rust `Send`, `Sync` with ownership; OxCaml `portable` and `contended` modes                                                                                                    | The runtime fact that a frozen value is safe to share. Proving race freedom statically needs ownership, which Ant does not have                                                           |
 
 Three lessons shape the proposal:
 
@@ -68,6 +70,55 @@ Three lessons shape the proposal:
 - **Don't fork the collection API.** Clojure and Immutable.js need a parallel world of types and
   conversions at every boundary. A frozen array is still an array, so `Array.map`, `for`, `len` and
   destructuring work on it unchanged.
+
+### Where languages are going
+
+The last two years show three trends. Ant's design follows the first two and leaves the third open.
+
+1. **Mutable languages add frozen collections beside their mutable ones, not instead of them.**
+   Python accepted `frozendict` for 3.15 in February 2026 and cited free threading as a reason. .NET
+   8 added `FrozenDictionary` and `FrozenSet` next to its persistent `Immutable*` types, because
+   most immutable tables are built once and read many times. JavaScript withdrew Records & Tuples
+   and moved on to Composites, frozen objects usable as map keys. None of these languages changed
+   what assignment means or made mutation the exception.
+2. **Sharing between threads is what pushes freezing to go deep.** `frozendict` and Composites are
+   shallow, and both say so. Every design aimed at sharing between threads goes deep: Ruby's
+   `Ractor.make_shareable`, Python's PEP 795 for subinterpreters, and the Dart VM's deeply immutable
+   objects for isolates. Ant has shared-memory goroutines, so it needs the deep form. The main
+   criticism of PEP 795 was what a deep freeze does to classes, functions and modules it reaches.
+   Ant has no classes, and rule 2 keeps functions and sync objects by reference.
+3. **Record types are becoming immutable by declaration.** Examples are Java records and value
+   classes (JEP 401), Kotlin's planned deeply immutable value classes, C# `readonly record struct`,
+   and Julia, where `struct` is immutable and `mutable struct` is the marked case. Julia's reason,
+   that immutability makes identity irrelevant, applies to Ant too, whose `==` is already
+   structural. It is open question 2 here, not part of the proposal, because Ant's records are
+   mutable today and changing the default would break every program.
+
+Static approaches have not spread. TypeScript's `readonly` is used mostly at API edges, and Go has
+declined every read-only proposal. Swift, Rust, Pony and OxCaml get race freedom from a type system
+that tracks ownership or modes, which Ant deliberately does not have (section 1, "Types are
+advisory").
+
+### Fit with Ant
+
+| Principle or decision                   | Fit     | Why                                                                                                                                          |
+| --------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Types are advisory                      | Strong  | The flag is on the value, so `ant run` enforces it with no annotations. This is the main reason not to use `readonly`                        |
+| One obvious way                         | Good    | One function, and no second collection API. The cost is that every container has two run-time states                                         |
+| Minimal syntax                          | Strong  | No keyword and no literal. `freeze([…])` covers constants                                                                                    |
+| Structural `==`, composite map keys     | Strong  | Ant already has what Composites add to JavaScript. Frozen keys close the "mutating a key" hole                                               |
+| Goroutines and shared memory            | Strong  | A frozen value sent on a channel can't be changed by the sender afterwards, which is a common Go bug. `Atomic` plus `freeze` gives snapshots |
+| `Bytes`, `string`, `Html` are immutable | Good    | The same property, extended to containers. `Bytes` stays its own type because of its representation, not its mutability                      |
+| Library close to Go                     | Weak    | Go has nothing like it and relies on convention and the race detector. Ant already goes beyond Go with structural `==` and `Bytes`           |
+| Interpreter stays simple                | Good    | One flag, about a dozen checks, and one graph walk. Persistent structures are deferred for this reason                                       |
+| JavaScript backend, exact results       | Good    | Uses the same flag, without `Object.freeze`, so behavior is identical                                                                        |
+| A checked program panics only on values | Partial | `Frozen[T]` assignable to `T` lets a frozen value reach a plain-typed write. That is the Java trade-off, made smaller by the checker         |
+
+Overall, the core fits Ant better than it fits most of the languages above. Ant's types are erased,
+so only a run-time property can give a guarantee. Its equality is already structural, so frozen
+values are good keys with no further work. Its concurrency is shared memory, so deep immutability is
+the cheapest way to share safely. The weak points are deliberate: the checker gap avoids `const`
+contagion, and O(n) updates keep the interpreter simple.
 
 ## The proposal
 
