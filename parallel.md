@@ -108,20 +108,20 @@ need. A `run` callback that ends in a value discards it with `_ = …`.
 5. **Outcome.** `map` returns `null` only when some element was never admitted; otherwise it returns
    the complete array, even when `ctx` ended after the last admission. `race` takes the first value
    returned, `Err` included. `any` takes the first `Ok`; an `Err` cancels nothing, and when every
-   callback fails it returns `Err` of the errors in input order. Both return `null` when the scope is
-   cancelled before a winner. Once chosen, the outcome is final, except that a panic overrides it.
-   `each` and `run` report no status. A done `ctx` after the call says neither which elements ran
-   nor whether their work finished; a program that needs to know records it per element, or uses
+   callback fails it returns `Err` of the errors in input order. Both return `null` when the scope
+   is cancelled before a winner. Once chosen, the outcome is final, except that a panic overrides
+   it. `each` and `run` report no status. A done `ctx` after the call says neither which elements
+   ran nor whether their work finished; a program that needs to know records it per element, or uses
    `map`.
 6. **Panics win.** If a callback lets a panic escape, the scope is cancelled, and after the join the
    call panics whatever rule 5 chose, including when a `race` or `any` loser panics after the
-   winner. The panic is raised again with its original message and trace, as `Panic.raise` does,
-   and reported once, where it finally ends a goroutine, not at every `Parallel` boundary. Later
-   panics in the same call are reported and dropped.
+   winner. The panic is raised again with its original message and trace, as `Panic.raise` does, and
+   reported once, where it finally ends a goroutine, not at every `Parallel` boundary. Later panics
+   in the same call are reported and dropped.
 7. **Visibility.** Every action of a callback, including its deferred blocks, happens before the
    call returns or propagates a panic, so a value a callback wrote is visible after the call without
-   a lock. Siblings that touch the same location during the call still need synchronization. `xs`
-   is read once, at the call, like every array a library function takes (section 11).
+   a lock. Siblings that touch the same location during the call still need synchronization. `xs` is
+   read once, at the call, like every array a library function takes (section 11).
 8. **Errors are values.** `map`, `each`, `run` and `race` never look inside a callback's value.
    `any` looks only at `Ok` versus `Err`; a callback that counts a 503 response as failure returns
    `Err` for it. Fail-fast on `Err` elsewhere is the program's choice, through `Context.cancel` on a
@@ -153,6 +153,11 @@ and nothing outside it can wake that wait. With a channel, `each` does the recei
 the scope context, so a panic or a cancelled `ctx` wakes it at once. A program with a blocking `Seq`
 feeds a channel from it. Over a channel, `each` is the worker pool that section 9 describes in
 prose: `limit` workers drain the jobs until the channel closes.
+
+The checker solves `T` from whichever member of `Array[T] | Channel[T]` the argument matches: an
+`Array[Job]` pairs with `Array[T]` and a `Channel[Job]` with `Channel[T]`, so `T` is `Job` either
+way. The checker already solves union parameters this way; the spec only has to say so (Spec
+changes, §4 Inference).
 
 ```ant
 Parallel.each(jobs, func(job: Job, work: Context) { process(job, work) }, limit: 8, ctx: ctx)
@@ -205,17 +210,17 @@ waits for an `Ok`, and `reply` is `Err` of both errors only when both fail.
 
 ## Edge cases
 
-| Case                                                     | Result                                                                                         |
-| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `map([], f, limit: 0)`                                   | Panics: the limit is checked before the input                                                  |
-| `ctx` already done, non-empty input                      | No callback runs; `map`, `race` and `any` return `null`, `each` and `run` return               |
-| `ctx` ends while `map` still has elements to admit       | Admitted callbacks see their context end; after the join, `null`                               |
-| `ctx` ends after `map` admitted its last element         | The complete array; callbacks may hold `Err` values with the context's reason                  |
-| Later elements finish first                              | `map` results and `any` errors stay in input order                                             |
-| `limit: 1` and a callback with `defer`                   | The deferred block finishes before the next element starts                                     |
-| `each` over `Channel[string \| null]`                    | `f` is called with each `null` value; only a close ends the stream                             |
-| `ctx` ends just after `each` received a value            | That value's callback still runs, with a done context                                          |
-| A `race` or `any` loser panics after the winner returned | The call panics with the loser's panic                                                         |
+| Case                                                     | Result                                                                                          |
+| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `map([], f, limit: 0)`                                   | Panics: the limit is checked before the input                                                   |
+| `ctx` already done, non-empty input                      | No callback runs; `map`, `race` and `any` return `null`, `each` and `run` return                |
+| `ctx` ends while `map` still has elements to admit       | Admitted callbacks see their context end; after the join, `null`                                |
+| `ctx` ends after `map` admitted its last element         | The complete array; callbacks may hold `Err` values with the context's reason                   |
+| Later elements finish first                              | `map` results and `any` errors stay in input order                                              |
+| `limit: 1` and a callback with `defer`                   | The deferred block finishes before the next element starts                                      |
+| `each` over `Channel[string \| null]`                    | `f` is called with each `null` value; only a close ends the stream                              |
+| `ctx` ends just after `each` received a value            | That value's callback still runs, with a done context                                           |
+| A `race` or `any` loser panics after the winner returned | The call panics with the loser's panic                                                          |
 | Every `any` callback returns `Err`                       | `Err` of all errors, in input order; `null` only if the scope was cancelled before the last one |
 
 ## Do we need `Group`?
@@ -223,15 +228,15 @@ waits for an `Ok`, and `reply` is `Err` of both errors only when both fail.
 Not in this proposal. `Parallel` covers work whose shape is known when the call starts. The case
 left over is work that adds more work to the same scope while it runs.
 
-| Use case                               | Today                                               | With `Parallel`                         |
-| -------------------------------------- | --------------------------------------------------- | --------------------------------------- |
-| Fetch N URLs, keep results             | `go` + `Mutex` + `WaitGroup` + placeholder          | `Parallel.map`                          |
-| Process N files, no results            | `go` + `WaitGroup`                                  | `Parallel.each(files, …)`               |
-| Worker pool over a job channel         | jobs channel + N workers + `WaitGroup`              | `Parallel.each(jobs, …)`                |
-| A few different tasks at once          | one `go` each + `WaitGroup`                         | `Parallel.run`                          |
-| Reader and writer, stop when one ends  | two `go` + `select` + `Context.cancel`              | `Parallel.race`                         |
-| Primary and mirror, first success wins | channel + counter + `select` + `Context.cancel`     | `Parallel.any`                          |
-| Crawler that finds new URLs as it goes | `go` + `WaitGroup`                                  | unchanged: needs `Group` or `WaitGroup` |
+| Use case                               | Today                                           | With `Parallel`                         |
+| -------------------------------------- | ----------------------------------------------- | --------------------------------------- |
+| Fetch N URLs, keep results             | `go` + `Mutex` + `WaitGroup` + placeholder      | `Parallel.map`                          |
+| Process N files, no results            | `go` + `WaitGroup`                              | `Parallel.each(files, …)`               |
+| Worker pool over a job channel         | jobs channel + N workers + `WaitGroup`          | `Parallel.each(jobs, …)`                |
+| A few different tasks at once          | one `go` each + `WaitGroup`                     | `Parallel.run`                          |
+| Reader and writer, stop when one ends  | two `go` + `select` + `Context.cancel`          | `Parallel.race`                         |
+| Primary and mirror, first success wins | channel + counter + `select` + `Context.cancel` | `Parallel.any`                          |
+| Crawler that finds new URLs as it goes | `go` + `WaitGroup`                              | unchanged: needs `Group` or `WaitGroup` |
 
 A crawler or a recursive directory walk keeps using `go` and `WaitGroup`. If such programs turn out
 to be common, `Group` can be proposed later on top of the same machinery. Streaming results, a `Seq`
@@ -241,18 +246,18 @@ out of `map`, wait until source cancellation and scope lifetime for them are set
 
 All changes are additions. No existing signature changes, and `select` is untouched.
 
-| Where                                  | Change                                                                                                                                           |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `spec/ant-lang.md` §9, Synchronization | Rewrite `fetchAll` with `Parallel.map` (below). Keep the `WaitGroup` version under Sharing results as the explanation of what happens underneath |
-| §9, Waiting                            | Replace the worker-pool and future sentences: a worker pool is `Parallel.each` over a channel; first-wins waits are `Parallel.race` and `any`    |
-| §9, Visibility                         | Add an ordering: every action of a `Parallel` callback, including its deferred blocks, happens before the call returns or propagates a panic     |
-| §9, Sharing results                    | Note that a callback may write a record field or array slot that the caller reads after the call, with no lock                                   |
-| §9, Panics in goroutines               | Add one paragraph: a panic in a `Parallel` callback is raised again in the caller with its original trace and reported once                      |
-| §11, intro                             | Name `Parallel.run` as the exception to the rule that ignored callback results are typed with a type parameter                                   |
-| §11, new subsection Parallel           | The five signatures, the rules, and the edge cases                                                                                               |
-| §12, Goroutines                        | State the scope rule; a `go` inside a callback is not owned by the call                                                                          |
-| §12, Runtime panics                    | Add two rows: `limit < 1` in `map` or `each`, and `race` with an empty array                                                                     |
-| `stdlib/prelude.ant`                   | Doc comments for the five functions, generated from the spec text                                                                                |
+| Where                                  | Change                                                                                                                                                                                                                           |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `spec/ant-lang.md` §4, Inference       | State how an argument solves a union parameter: each member of the argument's type pairs with the parameter member that shares its discriminator, and a bare type parameter member takes the rest. The checker already does this |
+| `spec/ant-lang.md` §9, Synchronization | Rewrite `fetchAll` with `Parallel.map` (below). Keep the `WaitGroup` version under Sharing results as the explanation of what happens underneath                                                                                 |
+| §9, Waiting                            | Replace the worker-pool and future sentences: a worker pool is `Parallel.each` over a channel; first-wins waits are `Parallel.race` and `any`                                                                                    |
+| §9, Visibility                         | Add an ordering: every action of a `Parallel` callback, including its deferred blocks, happens before the call returns or propagates a panic                                                                                     |
+| §9, Sharing results                    | Note that a callback may write a record field or array slot that the caller reads after the call, with no lock                                                                                                                   |
+| §9, Panics in goroutines               | Add one paragraph: a panic in a `Parallel` callback is raised again in the caller with its original trace and reported once                                                                                                      |
+| §11, intro                             | Name `Parallel.run` as the exception to the rule that ignored callback results are typed with a type parameter                                                                                                                   |
+| §11, new subsection Parallel           | The five signatures, the rules, and the edge cases                                                                                                                                                                               |
+| §12, Goroutines                        | State the scope rule; a `go` inside a callback is not owned by the call                                                                                                                                                          |
+| `ant/internal/prelude/prelude.d.ant`   | Doc comments for the five functions, generated from the spec text                                                                                                                                                                |
 
 The `fetchAll` example becomes:
 
@@ -264,8 +269,8 @@ func fetchAll(urls: Array[string], ctx: Context): Array[Result[Http.Response, Er
 
 In the Go interpreter each call is a `sync.WaitGroup`, a buffered channel as a semaphore acquired
 before each goroutine starts, a child context cancelled by a deferred call, and the first panic
-object under a mutex, re-raised with its trace as `runOnce` does in `ant/internal/lib/sync.go`. `each`
-over a channel receives with an internal closed flag rather than through `Channel.receive`'s
+object under a mutex, re-raised with its trace as `runOnce` does in `ant/internal/lib/sync.go`.
+`each` over a channel receives with an internal closed flag rather than through `Channel.receive`'s
 nullable result. The JS backend can map it onto the scheduler that runs `go` blocks.
 
 ## Non-goals
@@ -287,6 +292,8 @@ nullable result. The JS backend can map it onto the scheduler that runs `go` blo
 | ----------------------------------------- | -------------------------------------------------------------------------------------------- |
 | `Parallel` or `Concurrent`?               | `Parallel`: familiar, and clear enough                                                       |
 | Arrays in `each`?                         | Yes, as `Array[T] \| Channel[T]`; `Seq` is dropped because a blocking source cannot be woken |
+| Inference over `Array[T] \| Channel[T]`?  | Already supported: union members pair by discriminator; §4 gains the rule in words           |
+| Runtime panics table?                     | Unchanged: its library-function row covers `limit < 1` and `race([])`                        |
 | Scope context for `map`/`each` callbacks? | Yes, `func(T, Context)`; a captured parent context misses sibling panics and can block       |
 | `each` callback result?                   | A type parameter `R`, discarded, per the stdlib convention                                   |
 | `run` callback result?                    | `void`, a documented exception: one type parameter would force one result type on the list   |
