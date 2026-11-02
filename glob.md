@@ -1,6 +1,6 @@
 # Proposal: globbing
 
-2026-11-02 · Anton · Draft
+2026-11-02 · Anton · Accepted, in spec 92675aa
 
 ## Summary
 
@@ -253,16 +253,20 @@ pattern's elements lead into, and `os.ReadDir` per directory; `prelude.d.ant` do
   a program expands it with `File.glob` first.
 - A glob in `import` paths or `ant test` arguments.
 
+## Decisions
+
+Accepted 2026-11-02 as proposed:
+
+1. `**` as a whole element, zero or more elements, one or more as the last; elsewhere it is `*`.
+2. Wildcards skip names that begin with a dot; `hidden: true` lifts it.
+3. A directory the pattern leads into that cannot be read is `Err`, as for `File.walk`.
+4. `Path.match` returns `Result[bool, Error]`.
+5. No braces.
+6. A trailing separator matches directories only, and the result keeps it.
+
+Settled in writing the spec: in a set, `-` and `]` are escaped, as in Go, and a range whose end
+comes before its start is malformed, which Go does not check.
+
 ## Open questions
 
-1. **`**`.** Proposed: yes, as a whole element. Alternative: Go's syntax only, with `File.walk` for
-   recursion.
-2. **Dot files.** Proposed: wildcards skip them, `hidden: true` lifts it. Alternative: Go's rule,
-   `*` matches `.env`.
-3. **Errors below `dir`.** Proposed: `Err`, as `File.walk`. Alternative: skip what cannot be read,
-   as Go, Python and the shell.
-4. **`Path.match` as `Result[bool, Error]`.** Proposed: yes. Alternative: `bool` that panics on a
-   malformed pattern, as `Time` panics on a date that cannot be, which reads better in a filter but
-   breaks the `stdlib.md` rule for patterns from arguments.
-5. **Braces.** Proposed: no. They are the most common request after `**`, `*.{js,ts}`.
-6. **Trailing `/` for directories.** Proposed: yes, keeping the `/` in the result, as the shell.
+None.
