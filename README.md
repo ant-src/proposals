@@ -7,7 +7,6 @@ touches. Nothing here is part of the language until it is accepted and written i
 | Proposal                   | Summary                                                               | Status |
 | -------------------------- | --------------------------------------------------------------------- | ------ |
 | [ui.md](ui.md)             | A client framework and server components on `Html`                    | Sketch |
-| [parallel.md](parallel.md) | `Parallel.map`, `each`, `run` and `race`: bounded, joined fan-out     | Draft  |
 | [frozen.md](frozen.md)     | `freeze` and `Frozen[T]`: deep immutable copies, enforced at run time | Draft  |
 | [coverage.md](coverage.md) | Statement and branch coverage for `ant test` and `ant run`, in LCOV   | Draft  |
 
