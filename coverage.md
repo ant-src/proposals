@@ -20,7 +20,7 @@ exclusion comments, and no threshold flag.
 `ant test` says whether the tests pass. It cannot say what they left out:
 
 1. **Untested branches go unnoticed.** An `else` that handles a malformed input, the `Err` arm after
-   a `try`, or a `case` of a `select` that only fires on timeout can be wrong for months, because no
+   a `try`, or a clause of a `select` that only fires on timeout can be wrong for months, because no
    test reaches it and nothing points at it.
 2. **Untested files are invisible.** A module that no test file imports looks the same as one with
    full tests. Section 10 asks scripts to move their logic into libraries so that it can be tested;
@@ -54,8 +54,9 @@ Four lessons:
   compiled code is a measurable cost and a store of `1` is less. In a tree-walking interpreter a
   statement already costs far more than an atomic add, so Ant counts always and has no mode flag.
 - **LCOV is the format everything reads.** Codecov, Coveralls, SonarQube, GitLab, `genhtml`, VS
-  Code's Coverage Gutters, and JetBrains IDEs all take LCOV. Go's own profile format is read mainly
-  by Go's tools. Writing LCOV alone means one format to specify and no converter to ship.
+  Code's Coverage Gutters, and JetBrains' JavaScript tooling all take LCOV. Go's own profile format
+  is read mainly by Go's tools. Writing LCOV alone means one format to specify and no converter to
+  ship.
 - **Go can do without branches; Ant cannot.** Go reports statements only, and gets away with it
   because its error path is a block: `if err != nil { return err }` holds a statement that stays
   uncovered until a test reaches it. Ant's error path is `try f()` or `f() ?? return x`, inside one
@@ -73,7 +74,7 @@ Four lessons:
 A **statement** for coverage is a stop point of `dap.md` section 4 other than a pipeline stage:
 
 - each statement of a block: a function body, a script body, a lambda, a `go` block, a `defer`
-  block, a loop body, a branch of `if`, a clause of `select`, a test body, and a plain block;
+  block, a loop body, a branch of `if`, a clause of `select`, and a plain block;
 - each top-level `var` and `let` of a library module, as its initializer runs.
 
 Its **count** is the number of times the program reached it, counted before it runs, so a statement
@@ -102,16 +103,18 @@ never reached" in a report and "a breakpoint here never hit" agree. Some consequ
 A **branch point** is an expression that goes on one of a fixed set of ways. Each way is a
 **branch**, with a count of the times it was taken:
 
-| Branch point                         | Branches, in this order                              |
-| ------------------------------------ | ---------------------------------------------------- |
-| `if c { … }`, with or without `else` | `c` true; `c` false, also when there is no `else`    |
-| `a && b`                             | `b` evaluated; `b` skipped, because `a` was false    |
-| `a \|\| b`                           | `b` evaluated; `b` skipped, because `a` was true     |
-| `a ?? b`                             | `b` skipped, because `a` was not null; `b` evaluated |
-| `a?.b`                               | `a` not null; `a` null                               |
-| `try a`                              | `a` is `Ok`; `a` is `Err`, so `try` returned         |
-| `for x in e`, `while c`              | the body ran at least once; the body did not run     |
-| `select`                             | one branch per clause, in source order               |
+| Branch point                         | Branches, in this order                                             |
+| ------------------------------------ | ------------------------------------------------------------------- |
+| `if c { … }`, with or without `else` | `c` true; `c` false, also when there is no `else`                   |
+| `a && b`                             | `b` evaluated; `b` skipped, because `a` was false                   |
+| `a \|\| b`                           | `b` evaluated; `b` skipped, because `a` was true                    |
+| `a ?? b`                             | `a` null, so `b` evaluated; `a` not null, so `b` skipped            |
+| `a?.b`, `a?.[i]`, `f?.(x)`           | the left side not null; the left side null, so the result is `null` |
+| `try a`                              | `a` is `Ok`; `a` is `Err`, so `try` returned                        |
+| `for x in e`, `while c`              | the body ran at least once; the body did not run                    |
+| `select`                             | one branch per clause, in source order, an `else` clause included   |
+
+For the operators and loops, branch 0 is the way that evaluates more; `if` lists true first.
 
 - Each `if` of an `else if` chain is a branch point of its own, and so is each `?.` of a chain
   `a?.b?.c`. An `if` inside markup, `{if open { … }}`, is an `if`.
@@ -122,6 +125,9 @@ A **branch point** is an expression that goes on one of a fixed set of ways. Eac
   toward the total as uncovered, and the profile writes them as `-` (below).
 - A branch is **covered** when its count is above zero. `assert` is not a branch point: its failing
   way is a panic, which a test that passes never takes.
+- Parameter and field defaults (section 4, Field defaults; section 6) are not branch points. Whether
+  a default was used is a fact about a call, not a way through the function, and a default is
+  usually a literal. A default expression that is never used goes unreported.
 
 Each branch of `if` and `select` whose block holds a statement is also visible as that statement.
 The branch adds the ways that have no statement of their own: an `if` with no `else`, an empty
@@ -141,7 +147,9 @@ the moment each stopped. A branch is counted when the way is decided, before the
 not a declaration file, in directories not starting with `.`. Every one of them is covered whether
 or not a test loads it; one that none loads is parsed for its statements and reported at 0%. A
 module that a test loads from outside the paths is not covered. Each test file runs as a program of
-its own, and the counts of all of them are summed per statement and per branch.
+its own, and the counts of all of them are summed per statement and per branch. A covered file that
+no test loads and that does not parse is reported as a file that could not be loaded (`test.md`
+section 4), on standard error and with exit status `2`, and is left out of the totals.
 
 So `ant test` in a project's root covers the whole project, and `ant test ./parser` covers only that
 directory, the way `go test ./parser` covers that package. Scripts under the paths are covered and,
@@ -154,8 +162,9 @@ says what section 10 recommends.
 and declaration files never count, even when they match.
 
 **`ant run`.** The covered files are the modules the program loads, the script and its imports.
-There is no search: a file the program does not load is not part of its run. `-coverfiles` narrows
-the set the same way.
+There is no search: a file the program does not load is not part of its run. So here `-coverfiles`
+does not replace the set but narrows it: it keeps the loaded modules that match, and a matching file
+the program does not load is not reported.
 
 ### Flags
 
@@ -193,10 +202,13 @@ line ends after the statements. Under `-json`, the report is one more event befo
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `"coverage"` | `statements`, `statementsCovered`, `branches`, `branchesCovered`, and `files`: an array of objects with `file` and the same four counts, by path |
 
-The report is printed when the run ends normally, after test failures too: a failing run's coverage
-is still a fact about it. It is not printed when the command exits with status `2`, or when
-`Os.exit` ends it, which ends the command at once (`test.md` section 4); the profile is still
-written in the second case, since a script that exits with a status has run to its end.
+The report and the profile are written however the run ends once a program has run: when tests pass
+or fail, since a failing run's coverage is still a fact about it; when a panic ends the program;
+when `-timeout` runs out or an interrupt ends the run; and when `Os.exit` ends it. The command
+writes them before it exits with the program's status; no deferred block runs, as `Os.exit`
+promises. Under `ant test`, a file that could not be loaded is reported and the others still run and
+count, so a run that exits with status `2` still has a report. Only a usage error, or an `ant run`
+whose program could not be loaded, writes neither.
 
 ### The profile
 
@@ -241,9 +253,10 @@ end_of_record
   branch points on that line from 0 in source order; `branch` numbers its branches from 0 in the
   order of the table above. `count` is `-` when the branch point was never reached. `BRF` and `BRH`
   count branches and taken branches.
-- Lines and functions are LCOV's units. The total in the report is over statements, which is finer:
-  a file can show every line covered in the profile and still below 100% in the report, when two
-  statements share a line. The terminal gives the exact number and the profile gives the picture.
+- Lines, functions, and branches are LCOV's units. The statement share in the report is finer than
+  lines: a file can show every line covered in the profile and still be below 100% of statements in
+  the report, when two statements share a line. The terminal gives the exact numbers and the profile
+  gives the picture.
 
 The file is written whole when the run ends, replacing any file of that name. Merging profiles from
 several runs is left to the tools that read LCOV, which all do it.
@@ -253,8 +266,8 @@ several runs is left to the tools that read LCOV, which all do it.
 - **`ant dap`.** The debugger and coverage share their points but not their runs: `ant dap` takes no
   coverage flags in this proposal. A debug session is not a measurement.
 - **`ant lsp` and editors.** Editors read the LCOV file. A later change can let the editor plugins
-  run tests with coverage and show it with each editor's coverage view (VS Code's test coverage API
-  takes per-line counts).
+  run tests with coverage and show it with each editor's coverage view. VS Code's test coverage API
+  takes statement ranges and branches, which LCOV's lines lose (Later, below).
 - **Other backends.** Statements are stop points, which any backend that supports breakpoints has,
   and branch points are defined by the language's own operators. A JavaScript backend reports the
   same counts for the same run.
@@ -286,8 +299,9 @@ each statement's start line; the function records come from the top-level `func`
 ## Non-goals
 
 - **Condition and MC/DC coverage.** Whether each operand of `a && b || c` independently changed the
-  outcome. It is required in avionics (DO-178C) and rarely read anywhere else, and LCOV has no
-  record for it.
+  outcome. It is required in avionics (DO-178C) and rarely read anywhere else, it needs a record of
+  which operands decided each evaluation rather than a counter, and few tools besides LLVM's report
+  it.
 - **Exclusion comments.** No `// coverage: ignore`. Code that should not count belongs outside the
   covered files, which `-coverfiles` already controls.
 - **A threshold flag.** No `-coverfail 80`. A CI step can read the report or the profile, and a
@@ -301,6 +315,8 @@ each statement's start line; the function records come from the top-level `func`
 ## Later
 
 - **Editor integration.** Run with coverage from the test code lenses and show the result inline.
+- **A profile with exact ranges.** A JSON profile with each statement's and branch's start and end,
+  for editors whose coverage views take ranges, as VS Code's does.
 - **Coverage of `ant dap` launches**, if users want a debug launch and a measurement in one.
 
 ## Open questions
