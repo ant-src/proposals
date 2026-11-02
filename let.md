@@ -10,8 +10,10 @@ is allowed. Any assignment to a `let` name is a compile error, and in `ant run` 
 reached. `let` makes the binding fixed, not the value: `let xs = [1]` still allows
 `Array.push(xs, 2)`. Values are covered by `frozen.md`, and the two proposals are independent. The
 checker gets one new benefit: a top-level `let`, including an imported one, can be narrowed like a
-local. `var` keeps its meaning. `let` moves from the reserved words to the keywords, so no program
-that is valid today stops being valid.
+local. `var` keeps its meaning. Parameters, including a lambda's implicit `x`, and `for` variables
+become `let` bindings too, so every name is fixed unless `var` declares it. `let` moves from the
+reserved words to the keywords. The only programs that stop being valid are those that reassign a
+parameter or a `for` variable, and the existing Ant code has none.
 
 ## Motivation
 
@@ -93,7 +95,8 @@ select {
 ```
 
 `let` also goes wherever a `var` declaration goes: in a block, at the top level, after `export`, in
-a test file, and in front of a `select` head. Parameters and `for` variables are discussed below.
+a test file, and in front of a `select` head. Parameters and `for` variables are `let` bindings
+without the keyword (see below).
 
 ### Rules
 
@@ -156,8 +159,11 @@ Declaration files have no assignments, so changing the keyword changes nothing e
 
 ### Parameters and `for` variables
 
-Today both can be reassigned. This section records the research and a recommendation, which still
-needs a decision.
+Both are `let` bindings: assigning one is a compile error and, in `ant run`, a panic, as for a
+written `let`. That covers the parameters of a `func`, an anonymous `func` and a lambda, a lambda's
+implicit `x`, and every name a `for` binds, including its destructuring. There is no opt-in form: no
+`var` parameter and no `for var`. `_` stays assignable, as the write-only discard. The research
+behind the decision follows.
 
 | Language   | Parameters                                                                | `for` variable                                           |
 | ---------- | ------------------------------------------------------------------------- | -------------------------------------------------------- |
@@ -193,16 +199,24 @@ What the research shows:
    you can change a parameter's value through it, but you cannot rebind it. The checker gains
    nothing, because it already infers this for narrowing.
 
-**Recommendation.** Make parameters and `for` variables fixed, as `let` bindings, with no opt-in
-form: no `var` parameter and no `for var`. Every name in a program would then be fixed except one
-declared with `var`, including functions, types, imports, parameters and loop variables. The cost is
-the normalizing idiom: since a body cannot declare a parameter's name again, it binds a new name, as
-in `var c = ctx ?? Context.new()`. `_` stays assignable, as the write-only discard. The corpus shows
-nothing would break.
+**Why fixed.** Every name in a program is now fixed unless `var` declares it: functions, types,
+imports, parameters and loop variables. The cost is the normalizing idiom. A body cannot declare a
+parameter's name again, so it binds a new name, as in `var c = ctx ?? Context.new()`. The corpus
+shows nothing breaks.
 
-**The alternative is to leave both assignable**, as Go, Java and JavaScript do. That is consistent
-with leaving the choice of keyword to the programmer, and it costs nothing today. What it gives up
-is the loop-variable error and the clean rule above.
+**Rejected: leave both assignable**, as Go, Java and JavaScript do. It would cost nothing today, but
+it gives up the loop-variable error and the simple rule above.
+
+```ant
+func retry(attempts: int, ctx: Context | null = null): Result[Reply, Error] {
+  var left = attempts                           // attempts = attempts - 1 would be a compile error
+  var c = ctx ?? Context.new(Time.duration(seconds: 5))
+  ...
+}
+
+for x in xs { x = x * 2 }                       // compile error: x is a for variable; declare a var
+var doubled = Array.map(xs, { x * 2 })
+```
 
 ### No preferred form
 
@@ -220,10 +234,15 @@ again, as it may today, but not a name bound by `let`, and it cannot assign one.
 
 - **Section 2, Keywords.** Move `let` from the reserved words to the keywords. `const` stays
   reserved.
-- **Section 3, Variables.** Introduce `let` beside `var`, give the four rules and the style
-  sentence, and replace "There is no `++`, `--`, or `const`" with "There is no `++` or `--`".
-- **Section 5.** Destructuring and `select` heads accept `let` wherever they accept `var`.
+- **Section 3, Variables.** Introduce `let` beside `var`, give the four rules and the
+  no-preferred-form sentence, say that parameters and `for` variables are `let` bindings, and
+  replace "There is no `++`, `--`, or `const`" with "There is no `++` or `--`".
+- **Section 5.** Destructuring and `select` heads accept `let` wherever they accept `var`. Loops:
+  the variable a `for` binds each iteration is a `let`. Anonymous functions: lambda parameters and
+  the implicit `x` are `let`s.
 - **Section 6.** "Inside a block, bind a function with `var`" becomes "with `let` or `var`".
+  Parameters are `let` bindings: a body reads them and may change their values, but cannot reassign
+  them.
 - **Section 7, Narrowing.** Top-level and imported `let`s narrow. The rule for locals never
   reassigned stays, and now names `let` as the way to state it.
 - **Section 9, Data races.** Add the paragraph above.
@@ -231,7 +250,8 @@ again, as it may today, but not a name bound by `let`, and it cannot assign one.
 - **Section 12.** In Names and scopes, a binding records whether it is a `let`. In Runtime panics,
   add a row for assignment to a `let`, in the column of errors the checker rules out.
 - **`lsp.md`.** The `readonly` modifier. Inlay hints cover `let` as they cover `var`.
-- **`dap.md`.** `setVariable` refuses a `let`, which is listed with the `readOnly` attribute.
+- **`dap.md`.** `setVariable` refuses a `let`, a parameter and a `for` variable, which are listed
+  with the `readOnly` attribute.
 - **`doc.md`.** A doc comment attaches to a `let` as it does to a `var`.
 
 ## Implementation
@@ -244,10 +264,11 @@ again, as it may today, but not a name bound by `let`, and it cannot assign one.
   A `let` costs nothing at run time beyond that check on assignment.
 - **Tools.** Keyword lists in `highlight`, the REPL, and the Monaco, VS Code, Neovim and IntelliJ
   grammars. The LSP gets the modifier, the DAP the `readOnly` attribute, and `ant doc` shows `let`.
-- **Tests.** Each assignment form, assignments from closures and goroutines, narrowing of top-level
-  and imported `let`s, the runtime panic, declaration files, and a recursive local function bound
-  with `let`.
-- **Migration.** `prelude.d.ant` namespace constants become `let`. Nothing else has to change.
+- **Tests.** Each assignment form, on a `let`, a parameter, a lambda's `x` and a `for` variable, `_`
+  still assignable, assignments from closures and goroutines, narrowing of top-level and imported
+  `let`s, the runtime panic, declaration files, and a recursive local function bound with `let`.
+- **Migration.** `prelude.d.ant` namespace constants become `let`. Programs that reassign a
+  parameter or a `for` variable bind a `var` instead; the scan found none.
 
 ## Non-goals
 
@@ -283,4 +304,5 @@ again, as it may today, but not a name bound by `let`, and it cannot assign one.
    either keyword as they please (2026-11-02).
 2. **The REPL gets no exception.** A `let` holds for the rest of the session and cannot be declared
    again (2026-11-02).
-3. **Parameters and `for` variables:** pending. The research and recommendation are above.
+3. **Parameters and `for` variables are `let` bindings,** with no opt-in form and `_` exempt
+   (2026-11-02).
