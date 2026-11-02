@@ -202,10 +202,11 @@ below `dir`, as `missing/*.txt` asks for, is no match, not `Err`.
 
 `Path.match` matches the whole of `path`, element by element, with the same rules as `File.glob`, so
 `File.glob(p, dir)` gives the files and directories below `dir` whose relative path `q` has
-`Path.match(p, q) == Ok{ value: true }`, except for the links that `**` does not enter. It looks
-only at the text: it does not clean `path`, so `Path.match("*.txt", "./a.txt")` is
-`Ok{ value: false }`, and for a name alone a program passes `Path.base`. The argument order is Go's
-and `Regex.test`'s, pattern first.
+`Path.match(p, q) == Ok{ value: true }`, except for the links that `**` does not enter and for a
+pattern with `.` or `..` elements, whose results `File.glob` cleans: `src/../*.md` gives `c.md`,
+which `Path.match` of the same pattern does not match. It looks only at the text: it does not clean
+`path`, so `Path.match("*.txt", "./a.txt")` is `Ok{ value: false }`, and for a name alone a program
+passes `Path.base`. The argument order is Go's and `Regex.test`'s, pattern first.
 
 It returns a `Result`, as Go's `Match` returns an error, because the `stdlib.md` rule is that a
 namespace there does not panic on bad input, and a pattern often comes from an argument. In a filter
