@@ -9,9 +9,10 @@ immutable copy of `v`. Arrays, maps, sets and records reached from `v` are copie
 values that are already immutable are shared. A frozen value has the same kind, `==`, hash,
 rendering and `is` result as its mutable original. The only difference is that a write to it panics.
 The checker types the result as `Frozen[T]`, rejects writes through that type, and treats frozen
-containers as covariant. The guarantee belongs to the value, not to the annotation, so it still
-holds in `ant run`, where types are discarded. The proposal adds no keyword and no new collection
-types, and reference semantics stay as they are.
+containers as covariant. Writes are also guarded at run time, because the checker cannot see every
+write: `ant run` executes code that was never checked, and `Frozen[T]` is assignable to `T`, so a
+frozen value can reach code that writes through a plain type. The proposal adds no keyword and no
+new collection types, and reference semantics stay as they are.
 
 ## Motivation
 
@@ -45,7 +46,7 @@ mutable containers without adding a second set of them.
 
 | Approach                              | Examples                                                                                                                                                                                                            | What Ant takes                                                                                                                                                                            |
 | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Read-only view in the type system     | TypeScript `readonly`, `ReadonlyArray`, `as const`; C++ `const`; Go proposals #22876, #29192, #31464 (none accepted)                                                                                                | The static half only. Erased types guarantee nothing at run time, aliases still write, and `const` spreads through every signature that touches the value ("contagion")                   |
+| Read-only view in the type system     | TypeScript `readonly`, `ReadonlyArray`, `as const`; C++ `const`; Go proposals #22876, #29192, #31464 (none accepted)                                                                                                | The static half only. Unchecked code and mutable aliases still write, and `const` spreads through every signature that touches the value ("contagion")                                    |
 | Freeze in place                       | JavaScript `Object.freeze`; Ruby `freeze`                                                                                                                                                                           | Nothing. It is shallow, it freezes the value under every other name that holds it, and it races with a writer in another goroutine                                                        |
 | Deep freeze to share between threads  | Ruby `Ractor.make_shareable` (and the open `deep_freeze`, Feature #21962); Python PEP 795 (subinterpreters, not accepted); Dart VM deeply immutable objects for isolates                                            | The purpose and the depth: a value that crosses to another thread must be immutable all the way down. Ant copies where these freeze in place                                              |
 | Frozen copy, same interface           | Java `List.copyOf`, `Map.copyOf` (throw on mutation); Python `tuple`, `frozenset`, `frozendict` (PEP 814, Python 3.15); .NET `ToFrozenDictionary`, `ToFrozenSet`                                                    | The core model: a copy that is immutable, built once and read many times. Java shows the cost of runtime-only errors, so the checker catches direct writes                                |
@@ -60,10 +61,13 @@ mutable containers without adding a second set of them.
 
 Three lessons shape the proposal:
 
-- **In Ant, the guarantee must live in the value.** `ant run` discards annotations (section 1,
-  "Types are advisory"), so a `readonly` annotation would protect nothing at run time, and a racing
-  goroutine or an unchecked script could still write. Python, Java and .NET put the property on the
-  object for the same reason.
+- **In Ant, the guarantee must live in the value.** Two paths let a write reach a frozen value
+  without the checker seeing it: `ant run` executes unchecked code (section 1, "Types are
+  advisory"), and `Frozen[T]` is assignable to `T` to avoid `const` contagion. Type erasure alone is
+  not the reason: a fully checked program without frozen-to-mutable assignability would need no
+  run-time check. A `readonly` annotation closes neither path. Python (unchecked) and Java and .NET
+  (frozen collections behind the mutable interface) put the property on the object for the same
+  reasons.
 - **Copy, don't freeze in place.** `Object.freeze` changes a value that other names already hold,
   and in Ant that might be another goroutine in the middle of writing it. A copy leaves the original
   alone and costs only what is still mutable, since frozen parts are shared.
@@ -101,24 +105,24 @@ advisory").
 
 ### Fit with Ant
 
-| Principle or decision                   | Fit     | Why                                                                                                                                          |
-| --------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| Types are advisory                      | Strong  | The flag is on the value, so `ant run` enforces it with no annotations. This is the main reason not to use `readonly`                        |
-| One obvious way                         | Good    | One function, and no second collection API. The cost is that every container has two run-time states                                         |
-| Minimal syntax                          | Strong  | No keyword and no literal. `freeze([…])` covers constants                                                                                    |
-| Structural `==`, composite map keys     | Strong  | Ant already has what Composites add to JavaScript. Frozen keys close the "mutating a key" hole                                               |
-| Goroutines and shared memory            | Strong  | A frozen value sent on a channel can't be changed by the sender afterwards, which is a common Go bug. `Atomic` plus `freeze` gives snapshots |
-| `Bytes`, `string`, `Html` are immutable | Good    | The same property, extended to containers. `Bytes` stays its own type because of its representation, not its mutability                      |
-| Library close to Go                     | Weak    | Go has nothing like it and relies on convention and the race detector. Ant already goes beyond Go with structural `==` and `Bytes`           |
-| Interpreter stays simple                | Good    | One flag, about a dozen checks, and one graph walk. Persistent structures are deferred for this reason                                       |
-| JavaScript backend, exact results       | Good    | Uses the same flag, without `Object.freeze`, so behavior is identical                                                                        |
-| A checked program panics only on values | Partial | `Frozen[T]` assignable to `T` lets a frozen value reach a plain-typed write. That is the Java trade-off, made smaller by the checker         |
+| Principle or decision                   | Fit     | Why                                                                                                                                                             |
+| --------------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Types are advisory                      | Strong  | Unchecked runs and `Frozen[T]`-to-`T` assignment both bypass the checker, and the flag on the value catches both. This is the main reason not to use `readonly` |
+| One obvious way                         | Good    | One function, and no second collection API. The cost is that every container has two run-time states                                                            |
+| Minimal syntax                          | Strong  | No keyword and no literal. `freeze([…])` covers constants                                                                                                       |
+| Structural `==`, composite map keys     | Strong  | Ant already has what Composites add to JavaScript. Frozen keys close the "mutating a key" hole                                                                  |
+| Goroutines and shared memory            | Strong  | A frozen value sent on a channel can't be changed by the sender afterwards, which is a common Go bug. `Atomic` plus `freeze` gives snapshots                    |
+| `Bytes`, `string`, `Html` are immutable | Good    | The same property, extended to containers. `Bytes` stays its own type because of its representation, not its mutability                                         |
+| Library close to Go                     | Weak    | Go has nothing like it and relies on convention and the race detector. Ant already goes beyond Go with structural `==` and `Bytes`                              |
+| Interpreter stays simple                | Good    | One flag, about a dozen checks, and one graph walk. Persistent structures are deferred for this reason                                                          |
+| JavaScript backend, exact results       | Good    | Uses the same flag, without `Object.freeze`, so behavior is identical                                                                                           |
+| A checked program panics only on values | Partial | `Frozen[T]` assignable to `T` lets a frozen value reach a plain-typed write. That is the Java trade-off, made smaller by the checker                            |
 
-Overall, the core fits Ant better than it fits most of the languages above. Ant's types are erased,
-so only a run-time property can give a guarantee. Its equality is already structural, so frozen
-values are good keys with no further work. Its concurrency is shared memory, so deep immutability is
-the cheapest way to share safely. The weak points are deliberate: the checker gap avoids `const`
-contagion, and O(n) updates keep the interpreter simple.
+Overall, the core fits Ant better than it fits most of the languages above. Ant runs unchecked code
+and lets frozen values flow into plain types, so only a run-time property can give a guarantee. Its
+equality is already structural, so frozen values are good keys with no further work. Its concurrency
+is shared memory, so deep immutability is the cheapest way to share safely. The weak points are
+deliberate: the checker gap avoids `const` contagion, and O(n) updates keep the interpreter simple.
 
 ## The proposal
 
@@ -147,7 +151,11 @@ freeze[T](v: T): Frozen[T]       // a deep immutable copy of v; v itself when v 
 5. **Writes panic.** These all panic on a frozen value: `a.b = v`, `a[i] = v` (including compound
    assignment and destructuring assignment), and the nine mutating functions `Array.push`, `extend`,
    `pop`, `insert`, `removeAt`, `Map.set`, `Map.remove`, `Set.add` and `Set.remove`. The message
-   names the kind: `assignment to a frozen record`, `Array.push on a frozen array`.
+   names the kind: `assignment to a frozen record`, `Array.push on a frozen array`. The guard sits
+   on the container's store paths only: field, element, entry and member stores and the nine
+   functions. Reads, iteration, `len`, hashing and `==` never check the flag, and neither does
+   assigning to a variable: `p = q` rebinds `p` and writes nothing frozen, whatever `p` or `q`
+   holds. Storing a frozen value into a mutable container is an ordinary write.
 6. **Everything else is unchanged.** A frozen value has the same kind, so `is Array`, `is Point`,
    `==`, hashing, `String.from`, `Json.stringify`, `for`, `len`, indexing and destructuring treat it
    like any other value of that kind, and `freeze([1]) == [1]` is `true`. `Array.same` and the other
@@ -219,9 +227,12 @@ The checker rejects a write whose target has a `Frozen` static type: a field or 
 or a call of one of the nine mutating functions with a `Frozen` first argument. The checker knows
 those nine by name, as it knows `len`. A value that has a plain type but is frozen at run time,
 because it was passed to a `func f(xs: Array[int])` that pushes, panics at the write. That is the
-one gap the checker leaves. It is listed in section 12's last column, beside an index out of range,
-and it is never memory corruption: a covariant alias that tries to store the wrong element panics
-instead of storing it.
+trade-off this proposal makes: checked code can pass a frozen value to a mutating function and panic
+at run time. Rejecting it would need `Frozen[T]` not assignable to `T` (see Alternatives). It is
+listed in section 12's last column, beside an index out of range, and it is never memory corruption.
+The run-time guard is also what keeps covariance sound: a frozen array of circles seen as
+`Frozen[Array[Shape]]` and then as a plain `Array[Shape]` panics when a square is pushed, instead of
+storing it.
 
 ```ant
 var circles = freeze([Circle{ radius: 1.0 }])
@@ -230,6 +241,9 @@ Array.push(circles, Circle{ radius: 2.0 })       // compile error: Array.push mu
 
 func grow(xs: Array[Circle]): void { Array.push(xs, Circle{ radius: 2.0 }) }
 grow(circles)                                    // checks; panics: Array.push on a frozen array
+
+var mutable: Array[Shape] = shapes               // checks: Frozen[T] is assignable to T
+Array.push(mutable, Square{ side: 1.0 })         // checks; panics instead of storing a Square
 ```
 
 The checker could close that gap by inferring which parameters a function writes. That inference
@@ -278,10 +292,11 @@ collection, that is the cost the Later section addresses.
 ## Implementation
 
 - **Interpreter.** Add a `frozen` flag to `Array`, `Map`, `Set` and `Record`. Set it before the
-  value escapes `freeze`, and never clear it. Check it on about a dozen write paths. `freeze` walks
-  the graph with a memo table that keeps sharing and cycles. A frozen map or set can skip its read
-  lock, and a frozen key can cache its hash. Both are optional. This adds no new value kind, so
-  `==`, hashing and rendering need no changes.
+  value escapes `freeze`, and never clear it. Check it in the store paths of those four kinds (rule
+  5); reads and variable assignment are untouched. `freeze` walks the graph with a memo table that
+  keeps sharing and cycles. A frozen map or set could skip its read lock, and a frozen key could
+  cache its hash. Both are optional and need the benchmarks below to justify them. This adds no new
+  value kind, so `==`, hashing and rendering need no changes.
 - **Checker.** Add the `Frozen` type node with its normalization, the two assignability rules, the
   write check, and inference through `Frozen[Array[T]]` against `Array[T]`. Hover and `ant doc`
   print `Frozen[Point]`.
@@ -289,7 +304,17 @@ collection, that is the cost the Later section addresses.
   depends on `Object.freeze`.
 - **Tests.** Every rule above, the nine mutating functions, compound and destructuring assignment, a
   cyclic graph, freezing shared subgraphs once, and a race test with a frozen map read by many
-  goroutines while another reloads the `Atomic`.
+  goroutines while another reloads the `Atomic`. Covariance through mutable aliases: for arrays, map
+  values, set members and record fields, a frozen container widened covariantly, assigned to its
+  plain type and written must panic and leave the value unchanged, both checked and under `ant run`.
+  A checked call that passes a frozen value to a mutating function must check and then panic.
+- **Benchmarks.** The guard adds a branch to every container write, and its cost is unknown until
+  measured. Before acceptance, compare the interpreter with and without the flag on mutation-heavy
+  workloads: an array filled by `push` and rewritten by index, compound assignment in a loop, a map
+  built and drained with `Map.set` and `Map.remove`, a visited `Set` in a graph search, and a record
+  field updated in a hot loop. Add a read-heavy loop as a control and `freeze` on large, shared and
+  cyclic graphs. Run the same set on the JavaScript backend and record the results here. If the
+  write cost shows, revisit where the flag lives before the spec change.
 
 ## Non-goals
 
