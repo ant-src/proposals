@@ -9,6 +9,7 @@ touches. Nothing here is part of the language until it is accepted and written i
 | [ui.md](ui.md)             | A client framework and server components on `Html`                    | Sketch |
 | [parallel.md](parallel.md) | `Parallel.map`, `each`, `run` and `race`: bounded, joined fan-out     | Draft  |
 | [frozen.md](frozen.md)     | `freeze` and `Frozen[T]`: deep immutable copies, enforced at run time | Draft  |
+| [let.md](let.md)           | `let`: bindings that cannot be reassigned, beside `var`               | Draft  |
 
 ## Process
 
