@@ -4,17 +4,10 @@ Design proposals for [Ant](https://github.com/ant-src/spec). A proposal describe
 reaches the specification: the problem, prior art, the proposed API, and the spec sections it
 touches. Nothing here is part of the language until it is accepted and written into the spec.
 
-| Proposal                     | Summary                                                                        | Status   |
-| ---------------------------- | ------------------------------------------------------------------------------ | -------- |
-| [assert.md](assert.md)       | `assert(cond, message?)`: always on, shows compared values, narrows            | Draft    |
-| [writes.md](writes.md)       | Writes go straight to the OS, as in Go; `File.buffered(f)` opts in to a buffer | Accepted |
-| [glob.md](glob.md)           | `File.glob` and `Path.match`: `*`, `?`, `[..]`, `**`; dot files skipped        | Accepted |
-| [files.md](files.md)         | Temp files, modes, `0o` literals, copies, links, `touch`, locks, more `Os`     | Accepted |
-| [ui.md](ui.md)               | A client framework and server components on `Html`                             | Sketch   |
-| [parallel.md](parallel.md)   | `Parallel.map`, `each`, `run` and `race`: bounded, joined fan-out              | Draft    |
-| [testing.md](testing.md)     | `test "name" { }` in `*_test.ant` files, run by `ant test`                     | Accepted |
-| [debugging.md](debugging.md) | `ant dap`: a DAP debugger for VS Code, IntelliJ and other editors              | Accepted |
-| [strings.md](strings.md)     | `"..."` interpolates and spans lines; backticks are Go raw strings             | Accepted |
+| Proposal                   | Summary                                                           | Status |
+| -------------------------- | ----------------------------------------------------------------- | ------ |
+| [ui.md](ui.md)             | A client framework and server components on `Html`                | Sketch |
+| [parallel.md](parallel.md) | `Parallel.map`, `each`, `run` and `race`: bounded, joined fan-out | Draft  |
 
 ## Process
 
@@ -22,5 +15,6 @@ touches. Nothing here is part of the language until it is accepted and written i
    changes, non-goals and open questions.
 2. Review it. Decisions go into the proposal itself, so the file records why the design is what it
    is.
-3. Once accepted, the change is written into the spec and the proposal's status becomes Accepted. A
-   rejected proposal stays here with its status set to Declined and a line on why.
+3. Once accepted, the change is written into the spec and implemented, and the proposal is removed:
+   the spec is the record from then on, and git history keeps the proposal. A rejected proposal
+   stays here with its status set to Declined and a line on why.
