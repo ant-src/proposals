@@ -8,6 +8,7 @@ touches. Nothing here is part of the language until it is accepted and written i
 | ---------------------------- | ------------------------------------------------------------------------------ | -------- |
 | [assert.md](assert.md)       | `assert(cond, message?)`: always on, shows compared values, narrows            | Draft    |
 | [writes.md](writes.md)       | Writes go straight to the OS, as in Go; `File.buffered(f)` opts in to a buffer | Accepted |
+| [glob.md](glob.md)           | `File.glob` and `Path.match`: `*`, `?`, `[..]`, `**`; dot files skipped        | Draft    |
 | [files.md](files.md)         | Temp files, modes, `0o` literals, copies, links, `touch`, locks, more `Os`     | Accepted |
 | [ui.md](ui.md)               | A client framework and server components on `Html`                             | Sketch   |
 | [parallel.md](parallel.md)   | `Parallel.map`, `each`, `run` and `race`: bounded, joined fan-out              | Draft    |
