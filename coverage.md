@@ -26,7 +26,8 @@ exclusion comments, and no threshold flag.
    full tests. Section 10 asks scripts to move their logic into libraries so that it can be tested;
    without coverage there is no way to see whether it was.
 3. **Reviews and CI have no number.** Every hosted CI service and code review tool shows coverage on
-   a pull request if it is given a report. Ant cannot produce one, so Ant projects get nothing there.
+   a pull request if it is given a report. Ant cannot produce one, so Ant projects get nothing
+   there.
 4. **Scripts are tested by running them.** A command-line script is often checked end to end, by
    running it on sample input. Which of its lines those runs reach is the same question, outside
    `ant test`.
@@ -36,16 +37,16 @@ threshold and no gate. It answers "which code did this run reach", which is a fa
 
 ## Prior art
 
-| Tool                                  | Unit                                          | Modes                       | Report                                                       | What Ant takes                                                                                      |
-| ------------------------------------- | --------------------------------------------- | --------------------------- | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
-| Go `go test -cover`                   | basic block, with statement counts            | `set` (default), `count`, `atomic` | `coverage: 78.3% of statements`; text profile; `go tool cover -func`, `-html` | The flags, `-cover` and `-coverprofile`, the one-line total, and statements as the unit. Not the modes |
-| Go `go build -cover` (1.20)           | the same, for a whole program                 | the same                    | `GOCOVERDIR`, merged with `go tool covdata`                  | Coverage of a program run, not only of tests: `ant run -coverprofile`                               |
-| Go 1.22                               | —                                             | —                           | packages with no test files reported at 0%                   | Files no test loads count, at zero                                                                  |
-| Python `coverage.py`                  | line; branch (arcs) with `--branch`           | —                           | terminal table, HTML, XML, LCOV, JSON                        | The per-file terminal table. Not `# pragma: no cover`                                               |
-| JavaScript Istanbul / c8 / V8         | statement, branch, function, line             | —                           | LCOV, HTML, JSON                                             | LCOV as the one file format; function records in it                                                 |
-| Rust `cargo llvm-cov`, LLVM           | regions, with branch and MC/DC                | —                           | LCOV, HTML, JSON                                             | Nothing beyond LCOV: regions and MC/DC need a compiler's view of every subexpression                |
-| Deno `deno test --coverage`           | line, branch, function (from V8)              | —                           | `deno coverage --lcov`, HTML                                 | Confirmation that an interpreter-hosted test runner reports LCOV                                    |
-| Dart `dart test --coverage`           | line                                          | —                           | JSON, LCOV via `format_coverage`                             | Nothing new                                                                                         |
+| Tool                          | Unit                                | Modes                              | Report                                                                        | What Ant takes                                                                                         |
+| ----------------------------- | ----------------------------------- | ---------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Go `go test -cover`           | basic block, with statement counts  | `set` (default), `count`, `atomic` | `coverage: 78.3% of statements`; text profile; `go tool cover -func`, `-html` | The flags, `-cover` and `-coverprofile`, the one-line total, and statements as the unit. Not the modes |
+| Go `go build -cover` (1.20)   | the same, for a whole program       | the same                           | `GOCOVERDIR`, merged with `go tool covdata`                                   | Coverage of a program run, not only of tests: `ant run -coverprofile`                                  |
+| Go 1.22                       | —                                   | —                                  | packages with no test files reported at 0%                                    | Files no test loads count, at zero                                                                     |
+| Python `coverage.py`          | line; branch (arcs) with `--branch` | —                                  | terminal table, HTML, XML, LCOV, JSON                                         | The per-file terminal table. Not `# pragma: no cover`                                                  |
+| JavaScript Istanbul / c8 / V8 | statement, branch, function, line   | —                                  | LCOV, HTML, JSON                                                              | LCOV as the one file format; function records in it                                                    |
+| Rust `cargo llvm-cov`, LLVM   | regions, with branch and MC/DC      | —                                  | LCOV, HTML, JSON                                                              | Nothing beyond LCOV: regions and MC/DC need a compiler's view of every subexpression                   |
+| Deno `deno test --coverage`   | line, branch, function (from V8)    | —                                  | `deno coverage --lcov`, HTML                                                  | Confirmation that an interpreter-hosted test runner reports LCOV                                       |
+| Dart `dart test --coverage`   | line                                | —                                  | JSON, LCOV via `format_coverage`                                              | Nothing new                                                                                            |
 
 Four lessons:
 
@@ -82,8 +83,8 @@ This makes the unit the same one the debugger stops at and a breakpoint binds to
 never reached" in a report and "a breakpoint here never hit" agree. Some consequences, all intended:
 
 - `if c { a } else { b }` is one statement, plus `a` and `b` in their branches, so an untaken branch
-  shows, also when the `if` is an expression inside another statement: `var x = if c { 1 } else { 2
-  }` has three statements.
+  shows, also when the `if` is an expression inside another statement:
+  `var x = if c { 1 } else { 2 }` has three statements.
 - A lambda's body is a block, so `Array.map(xs, { x -> x * 2 })` with an empty `xs` leaves `x * 2`
   uncovered. So does markup's `{if user != null { <a>…</a> }}`, whose branch is a block.
 - `a && b`, `a ?? b`, `a?.b`, `try f()`, and `f() ?? return x` are inside one statement: statement
@@ -101,16 +102,16 @@ never reached" in a report and "a breakpoint here never hit" agree. Some consequ
 A **branch point** is an expression that goes on one of a fixed set of ways. Each way is a
 **branch**, with a count of the times it was taken:
 
-| Branch point                     | Branches, in this order                                                     |
-| -------------------------------- | --------------------------------------------------------------------------- |
-| `if c { … }`, with or without `else` | `c` true; `c` false, also when there is no `else`                       |
-| `a && b`                         | `b` evaluated; `b` skipped, because `a` was false                           |
-| `a \|\| b`                         | `b` evaluated; `b` skipped, because `a` was true                            |
-| `a ?? b`                         | `b` skipped, because `a` was not null; `b` evaluated                        |
-| `a?.b`                           | `a` not null; `a` null                                                      |
-| `try a`                          | `a` is `Ok`; `a` is `Err`, so `try` returned                                |
-| `for x in e`, `while c`          | the body ran at least once; the body did not run                            |
-| `select`                         | one branch per clause, in source order                                      |
+| Branch point                         | Branches, in this order                              |
+| ------------------------------------ | ---------------------------------------------------- |
+| `if c { … }`, with or without `else` | `c` true; `c` false, also when there is no `else`    |
+| `a && b`                             | `b` evaluated; `b` skipped, because `a` was false    |
+| `a \|\| b`                           | `b` evaluated; `b` skipped, because `a` was true     |
+| `a ?? b`                             | `b` skipped, because `a` was not null; `b` evaluated |
+| `a?.b`                               | `a` not null; `a` null                               |
+| `try a`                              | `a` is `Ok`; `a` is `Err`, so `try` returned         |
+| `for x in e`, `while c`              | the body ran at least once; the body did not run     |
+| `select`                             | one branch per clause, in source order               |
 
 - Each `if` of an `else if` chain is a branch point of its own, and so is each `?.` of a chain
   `a?.b?.c`. An `if` inside markup, `{if open { … }}`, is an `if`.
@@ -128,10 +129,10 @@ block, and every operator in the table.
 
 ### Counting
 
-Counting is per program run and atomic: statements and branches reached by goroutines, by parallel tests, and by
-a goroutine that a leaked-goroutine check ends (section 10, Tests) all count, up to the moment each
-stopped. A branch is counted when the way is decided, before the code on it runs: `try` counts its
-`Err` before it returns.
+Counting is per program run and atomic: statements and branches reached by goroutines, by parallel
+tests, and by a goroutine that a leaked-goroutine check ends (section 10, Tests) all count, up to
+the moment each stopped. A branch is counted when the way is decided, before the code on it runs:
+`try` counts its `Err` before it returns.
 
 ### Which files are covered
 
@@ -160,11 +161,11 @@ the set the same way.
 
 Both commands take, before the file or paths:
 
-| Flag                 | Meaning                                                                         |
-| -------------------- | ------------------------------------------------------------------------------- |
+| Flag                 | Meaning                                                                            |
+| -------------------- | ---------------------------------------------------------------------------------- |
 | `-cover`             | Count statements and branches, and print the coverage report (below) after the run |
-| `-coverprofile file` | Count, and write an LCOV tracefile to `file`; it implies `-cover`               |
-| `-coverfiles glob`   | Cover the files that match instead (above); it implies `-cover`; repeatable     |
+| `-coverprofile file` | Count, and write an LCOV tracefile to `file`; it implies `-cover`                  |
+| `-coverfiles glob`   | Cover the files that match instead (above); it implies `-cover`; repeatable        |
 
 Without them nothing is counted, so a run without coverage costs nothing more than today.
 
@@ -185,11 +186,11 @@ The first line is the total over all covered files, with one decimal, as Go prin
 statements over statements and taken branches over branches, `100.0%` only when every one ran. Then
 one line per covered file, as a path relative to the working directory, sorted by path, with its
 shares and its counts; a file with no branch point shows `-` for branches. With no statement at all
-the line is `coverage: [no statements]`, again as in Go, and with statements but no branch point
-the line ends after the statements. Under `-json`, the report is one more event before `done`:
+the line is `coverage: [no statements]`, again as in Go, and with statements but no branch point the
+line ends after the statements. Under `-json`, the report is one more event before `done`:
 
-| `action`     | Other fields                                                                             |
-| ------------ | ---------------------------------------------------------------------------------------- |
+| `action`     | Other fields                                                                                                                                     |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `"coverage"` | `statements`, `statementsCovered`, `branches`, `branchesCovered`, and `files`: an array of objects with `file` and the same four counts, by path |
 
 The report is printed when the run ends normally, after test failures too: a failing run's coverage
@@ -235,11 +236,11 @@ end_of_record
   them (`parse`, `Point.dist`), at the line of its `func`. `FNDA` is how many times its body was
   entered. Lambdas, local functions, and `go` blocks have no `FN` record; their statements have `DA`
   records like any other.
-- `BRDA:line,block,branch,count` has one record per branch. `line` is the line of the branch
-  point's keyword or operator (`if`, `&&`, `??`, `?.`, `try`, `for`, `while`, `select`); `block`
-  numbers the branch points on that line from 0 in source order; `branch` numbers its branches from
-  0 in the order of the table above. `count` is `-` when the branch point was never reached. `BRF`
-  and `BRH` count branches and taken branches.
+- `BRDA:line,block,branch,count` has one record per branch. `line` is the line of the branch point's
+  keyword or operator (`if`, `&&`, `??`, `?.`, `try`, `for`, `while`, `select`); `block` numbers the
+  branch points on that line from 0 in source order; `branch` numbers its branches from 0 in the
+  order of the table above. `count` is `-` when the branch point was never reached. `BRF` and `BRH`
+  count branches and taken branches.
 - Lines and functions are LCOV's units. The total in the report is over statements, which is finer:
   a file can show every line covered in the profile and still below 100% in the report, when two
   statements share a line. The terminal gives the exact number and the profile gives the picture.
@@ -261,8 +262,8 @@ several runs is left to the tools that read LCOV, which all do it.
 ## Spec changes
 
 - `spec/test.md` section 1: `-cover`, `-coverprofile`, `-coverfiles` in the flag table. A new
-  section, Coverage, with statements, branch points and their order, which files, the report, the `coverage` JSON event, and
-  the profile. Section 4: the report and profile on each exit path.
+  section, Coverage, with statements, branch points and their order, which files, the report, the
+  `coverage` JSON event, and the profile. Section 4: the report and profile on each exit path.
 - `spec/ant-lang.md` section 10, Scripts, or wherever `ant run`'s flags are listed: the same three
   flags, pointing to `test.md`'s Coverage section for their meaning.
 - `spec/dap.md` section 4: one sentence noting that coverage counts the statement stop points, so a
@@ -276,11 +277,11 @@ coverage on, the loader numbers the statement stop points of each covered module
 gives each module a `[]atomic.Uint64`, and the statement node carries its index, so the hook is one
 atomic add, with no map lookup. Branch points get the same treatment: each `if`, `&&`, `||`, `??`,
 `?.`, `try`, loop, and `select` node carries the index of its first branch counter, and the
-evaluator, which already knows which way it went, adds one to that index plus the way. Files under the search that a test file does not load are parsed
-without being run, only to number their statements and branches. `ant test` sums the counters of each test file's
-program into one table keyed by path and counter index, and writes the report and profile from it.
-The parser's spans give each statement's start line; the function records come from the top-level
-`func` declarations.
+evaluator, which already knows which way it went, adds one to that index plus the way. Files under
+the search that a test file does not load are parsed without being run, only to number their
+statements and branches. `ant test` sums the counters of each test file's program into one table
+keyed by path and counter index, and writes the report and profile from it. The parser's spans give
+each statement's start line; the function records come from the top-level `func` declarations.
 
 ## Non-goals
 
