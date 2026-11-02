@@ -93,8 +93,7 @@ select {
 ```
 
 `let` also goes wherever a `var` declaration goes: in a block, at the top level, after `export`, in
-a test file, and in front of a `select` head. A `for` loop variable keeps its current form, and so
-do parameters (see Open questions).
+a test file, and in front of a `select` head. Parameters and `for` variables are discussed below.
 
 ### Rules
 
@@ -155,17 +154,67 @@ A namespace constant becomes `let Owner.NAME: T` with no initializer, so `prelud
 `let Math.PI: float64`. A declaration file that still writes `var Owner.NAME` gets a compile error.
 Declaration files have no assignments, so changing the keyword changes nothing else.
 
-### Style
+### Parameters and `for` variables
 
-Use `let` unless the binding is reassigned. The spec's examples, `prelude.d.ant`, and the standard
-library's Ant sources follow that rule. The tools steer without making it an error:
+Today both can be reassigned. This section records the research and a recommendation, which still
+needs a decision.
 
-- **LSP.** A `var` that is never reassigned gets a diagnostic of severity Hint, "never reassigned;
-  declare with let", with a quick fix. A `let` name gets the `readonly` semantic-token modifier, so
-  an editor can color it differently.
-- **`ant check`** reports nothing for such a `var`. Ant has no warnings, and making this an error is
-  open question 1.
-- **`ant fmt`** does not rewrite `var` to `let`. It changes layout, not declarations.
+| Language   | Parameters                                                                | `for` variable                                           |
+| ---------- | ------------------------------------------------------------------------- | -------------------------------------------------------- |
+| Swift      | Fixed. `var` parameters were removed in Swift 3 (SE-0003)                 | Fixed; `for var x` allowed                               |
+| Kotlin     | Fixed. `var` parameters were removed before 1.0                           | Fixed, with no opt-in                                    |
+| Scala      | Fixed                                                                     | Fixed                                                    |
+| Rust       | Fixed unless `mut x`                                                      | Fixed unless `for mut x`                                 |
+| Zig        | Fixed; copy into a `var` to change                                        | Fixed captures                                           |
+| Odin       | Fixed; `x := x` makes a mutable copy                                      |                                                          |
+| C#         | Assignable                                                                | Fixed (error CS1656)                                     |
+| Go         | Assignable                                                                | Assignable; a fresh variable per iteration since Go 1.22 |
+| Java       | Assignable, `final` opt-in; Checkstyle `ParameterAssignment` flags writes | Assignable, `final` opt-in                               |
+| JavaScript | Assignable; ESLint `no-param-reassign` (in Airbnb's style)                | `for (const x of xs)`, which `prefer-const` asks for     |
+| Dart       | Assignable; lint `parameter_assignments`                                  | Assignable; lint `prefer_final_in_for_each`              |
+| Python     | Assignable                                                                | Assignable                                               |
+
+What the research shows:
+
+1. **The change has gone one way.** Swift and Kotlin both had reassignable parameters and removed
+   them. Both gave the same reason: readers took a reassignable parameter for pass by reference, and
+   saving one line of copying did not pay for that. The Swift core team added that a parameter list
+   is not a pattern, so neither `let` nor `var` belongs there. No language has gone the other way.
+   The languages that kept assignable parameters gained lints against reassigning them.
+2. **An assignable loop variable invites one particular bug.** `for x in xs { x = x * 2 }` looks
+   like it updates `xs`, and it does not. C#, Swift, Kotlin, Rust and Zig reject the assignment. Go
+   needed a release, 1.22, to fix the opposite bug, a variable shared across iterations, which Ant
+   avoided from the start.
+3. **Ant code doesn't reassign either.** A scan of the 590 `.ant` files across the repositories
+   found about 1,320 parameters and 153 `for` variables. Apart from `_` and tests of assignment
+   itself, none is ever assigned.
+4. **Ant's reference values make the misreading more likely.** `p.x = 1` changes the caller's
+   record, while `p = q` changes nothing the caller sees. With fixed parameters the rule is simple:
+   you can change a parameter's value through it, but you cannot rebind it. The checker gains
+   nothing, because it already infers this for narrowing.
+
+**Recommendation.** Make parameters and `for` variables fixed, as `let` bindings, with no opt-in
+form: no `var` parameter and no `for var`. Every name in a program would then be fixed except one
+declared with `var`, including functions, types, imports, parameters and loop variables. The cost is
+the normalizing idiom: since a body cannot declare a parameter's name again, it binds a new name, as
+in `var c = ctx ?? Context.new()`. `_` stays assignable, as the write-only discard. The corpus shows
+nothing would break.
+
+**The alternative is to leave both assignable**, as Go, Java and JavaScript do. That is consistent
+with leaving the choice of keyword to the programmer, and it costs nothing today. What it gives up
+is the loop-variable error and the clean rule above.
+
+### No preferred form
+
+Ant does not prefer one keyword over the other. A `var` that is never reassigned is as valid as a
+`let`, and no tool reports or rewrites it: `ant check` has no warnings, the LSP shows no hint, and
+`ant fmt` changes layout, not declarations. A program uses `let` where it wants the guarantee. The
+LSP marks a `let` name with the `readonly` semantic-token modifier, so an editor can color it.
+
+### The REPL
+
+A `let` entered in the REPL holds for the rest of the session. A later input may declare other names
+again, as it may today, but not a name bound by `let`, and it cannot assign one.
 
 ## Spec changes
 
@@ -181,8 +230,7 @@ library's Ant sources follow that rule. The tools steer without making it an err
 - **Section 10.** Module items, `export let`, `let` in declaration files, and imported names.
 - **Section 12.** In Names and scopes, a binding records whether it is a `let`. In Runtime panics,
   add a row for assignment to a `let`, in the column of errors the checker rules out.
-- **`lsp.md`.** The `readonly` modifier, the Hint, and the quick fix. Inlay hints cover `let` as
-  they cover `var`.
+- **`lsp.md`.** The `readonly` modifier. Inlay hints cover `let` as they cover `var`.
 - **`dap.md`.** `setVariable` refuses a `let`, which is listed with the `readOnly` attribute.
 - **`doc.md`.** A doc comment attaches to a `let` as it does to a `var`.
 
@@ -195,13 +243,11 @@ library's Ant sources follow that rule. The tools steer without making it an err
 - **Interpreter.** A binding slot records that it is a `let`, and the assignment path panics on it.
   A `let` costs nothing at run time beyond that check on assignment.
 - **Tools.** Keyword lists in `highlight`, the REPL, and the Monaco, VS Code, Neovim and IntelliJ
-  grammars. The LSP gets the modifier, Hint and quick fix, the DAP the `readOnly` attribute, and
-  `ant doc` shows `let`.
+  grammars. The LSP gets the modifier, the DAP the `readOnly` attribute, and `ant doc` shows `let`.
 - **Tests.** Each assignment form, assignments from closures and goroutines, narrowing of top-level
   and imported `let`s, the runtime panic, declaration files, and a recursive local function bound
   with `let`.
-- **Migration.** Change the spec examples, `prelude.d.ant` and `testdata` to `let` where nothing
-  reassigns, using the LSP quick fix.
+- **Migration.** `prelude.d.ant` namespace constants become `let`. Nothing else has to change.
 
 ## Non-goals
 
@@ -209,7 +255,6 @@ library's Ant sources follow that rule. The tools steer without making it an err
 - Compile-time constants, as in Go's `const`. A `let` initializer is any expression, run in source
   order.
 - Readonly record fields.
-- Changing parameters or `for` variables.
 - Making `let` the only binding form: `var` stays.
 
 ## Alternatives considered
@@ -229,20 +274,13 @@ library's Ant sources follow that rule. The tools steer without making it an err
   program, and the mutable form would end up with the keyword Swift, Rust and the ML family use for
   the fixed one.
 - **Rust's `let` and `let mut`.** Fixed by default suits Rust because its ownership system relies on
-  it. In Ant it would change every existing declaration to buy what a Hint and a quick fix already
-  give.
+  it. In Ant it would change every existing declaration, and the choice between `let` and `var` is
+  left to the programmer.
 
-## Open questions
+## Decisions
 
-1. **Make a never-reassigned `var` an error?** Zig did this and found bugs, and it would make `let`
-   the one obvious way for constants. The costs are friction while editing, since commenting out the
-   one assignment breaks the build, and a first lint-like rule in a checker that has no warnings.
-   This draft uses the LSP Hint and can be tightened later without breaking programs that follow it.
-2. **Parameters.** Should parameters be fixed, as in Swift, Kotlin and Zig? Reassigning a parameter
-   is rare and usually a mistake, and fixed parameters would let every parameter narrow inside
-   closures. But it would break programs that work today, so it needs its own decision.
-3. **`for` variables.** Each iteration already binds a fresh variable. A `for` variable could be
-   made a `let`, which is what it almost always is, or left as it is. The same breakage argument as
-   for parameters applies.
-4. **The REPL.** The REPL lets a later line declare a name again. A `let` entered there should
-   probably follow the same rule, so that a session can redefine it.
+1. **A `var` that is never reassigned stays valid.** No error, no hint, no rewrite: programmers use
+   either keyword as they please (2026-11-02).
+2. **The REPL gets no exception.** A `let` holds for the rest of the session and cannot be declared
+   again (2026-11-02).
+3. **Parameters and `for` variables:** pending. The research and recommendation are above.
