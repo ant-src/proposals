@@ -10,7 +10,7 @@ touches. Nothing here is part of the language until it is accepted and written i
 | [frozen.md](frozen.md)         | `freeze` and `Frozen[T]`: deep immutable copies, enforced at run time      | Draft  |
 | [coverage.md](coverage.md)     | Statement and branch coverage for `ant test` and `ant run`, in LCOV        | Draft  |
 | [reflect.md](reflect.md)       | Types as values: `type X`, `Type.info`, `Type.build`; JSON decoding on top | Draft  |
-| [reflection.md](reflection.md) | Type values, `Reflect.info`, `Reflect.Value`: the base for typed decoders  | Draft  |
+| [reflection.md](reflection.md) | `type T` values, `Type.shape`, and `Dynamic` boxes that keep their type    | Draft  |
 | [interfaces.md](interfaces.md) | Interfaces satisfied by functions on types, dispatched on the value's tag  | Draft  |
 
 ## Process
