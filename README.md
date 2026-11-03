@@ -11,7 +11,7 @@ touches. Nothing here is part of the language until it is accepted and written i
 | [coverage.md](coverage.md)     | Statement and branch coverage for `ant test` and `ant run`, in LCOV        | Draft  |
 | [reflect.md](reflect.md)       | Types as values: `type X`, `Type.info`, `Type.build`; JSON decoding on top | Draft  |
 | [reflection.md](reflection.md) | `type T` values, `Type.shape`, and `Dynamic` boxes that keep their type    | Draft  |
-| [interfaces.md](interfaces.md) | Interfaces satisfied by functions on types, dispatched on the value's tag  | Draft  |
+| [interfaces.md](interfaces.md) | `->` calls a value's own functions; interfaces checked, not run            | Draft  |
 
 ## Process
 
