@@ -207,6 +207,7 @@ type Type.Erased                                 // opaque: a type value of unkn
 Type.erase[T](t: Type[T]): Type.Erased
 Type.shape(t: Type.Erased): Type.Shape            // one level; aliases expanded, unions flattened
 Type.assignable(from: Type.Erased, to: Type.Erased): bool   // section 4's rule, on two closed types
+Type.default(t: Type.Erased, name: string): Dynamic          // a field's default, evaluated afresh
 
 type Type.Shape = Type.Null | Type.Void | Type.Never | Type.Bool | Type.Int | Type.Float | Type.String
   | Type.Array | Type.Map | Type.Set | Type.Record | Type.Named | Type.Union | Type.Func | Type.Opaque
@@ -232,7 +233,7 @@ type Type.Opaque = { name: string }
 - **Records.** `name` is the declared name, or `null` for an anonymous record type. `args` are the
   type arguments, and `fields` come in declaration order, with each field's type already
   substituted: in `Box[int]`, the field `value` has type `int`. `hasDefault` says whether a literal,
-  and so a builder, may leave the field out. The default itself is not exposed (open question 4).
+  and so a builder, may leave the field out, and `Type.default` gives the default itself.
 - **Named primitives.** `Id[User]` and `Id[Account]` share a tag (section 4) but are different type
   values, because their `args` differ.
 - **Unions.** Members are flattened and deduplicated, aliases are expanded, and the members come in
@@ -262,6 +263,17 @@ if s is Type.Record {
 type parameters, and no default parameters to consider. It is the relation the readers, the
 builders, and `Dynamic.to` use, and it is exposed so that format code can test before it calls a
 function that would panic.
+
+`Type.default(t, name)` evaluates the default of field `name` of the named record type `t` and boxes
+it at the field's substituted type, resolved to a member as a reader resolves it (see Dynamic
+values). The evaluation is the one a literal performs (section 4, Field defaults): afresh on every
+call, in the scope of the declaration, so `tags: Array[string] = []` gives a new array each time,
+and a default that reads a variable reads its current value. The checker has already checked the
+default against the field's type, for every type argument of a generic record, so the box keeps the
+invariant. It panics when `t` is not a named record type, when the type has no field `name`, or when
+that field has no default, all of which `Type.shape` lets the caller test first. An encoder that
+leaves out fields equal to their defaults, `omitempty` in spirit, compares
+`Dynamic.field(d, f.name) == Type.default(t, f.name)` for each field whose `hasDefault` is set.
 
 ### Dynamic values
 
@@ -474,7 +486,8 @@ A map key decodes through `decodeAt` too, since a JSON key is a `string` and `st
 `$.servers[2].port: want int`. A real encoder rejects a map key whose text is not a JSON string, and
 handles `Time.Instant` and other opaque types through a table of codecs keyed by type value
 (`Map[Type.Erased, Codec]`), which works because type values are `==` and hash. A codec decodes with
-`Time.parseInstant` and boxes with `Dynamic.of(type(Time.Instant), instant)`.
+`Time.parseInstant` and boxes with `Dynamic.of(type(Time.Instant), instant)`. An encoder that leaves
+out default values tests each record field with `Type.default`, as above, before it writes it.
 
 ## Spec changes
 
@@ -513,8 +526,8 @@ handles `Time.Instant` and other opaque types through a table of codecs keyed by
   a `*TypeValue`). Equality and hashing follow the coinductive rule that maps and records already
   use.
 - **Interpreter** (`ant/internal/interp`). Evaluate `TypeExpr` once per node and cache the result.
-  Substitute type arguments when a shape reads a generic body. Builders reuse `fillDefaults`, so a
-  default runs exactly as it would in a literal.
+  Substitute type arguments when a shape reads a generic body. Builders and `Type.default` reuse
+  `fillDefaults`, so a default runs exactly as it would in a literal.
 - **Assignability on closed types.** The runtime needs section 4's relation on descriptors without
   inference. It is small (same type, union membership, `never`, anonymous record width, invariant
   arguments, function variance), but it duplicates `ant/internal/types/assign.go`. A test generates
@@ -528,11 +541,13 @@ handles `Time.Instant` and other opaque types through a table of codecs keyed by
 - **Tests.** Every shape, including recursive records, recursive aliases (`Json.Value`), local
   types, generic records and named primitives with arguments, and prelude types. Union resolution
   for each discriminator kind, including the anonymous member and a sync member. Every builder
-  contract panic. Defaults filled by `makeRecord` with fresh evaluation per call. The soundness
-  cases: an empty `Array[int]` boxed and unboxed as `Array[string]` panics, `Array[Circle]` is
-  refused for an `Array[Shape]` slot, and a `Person` is accepted for a `{ name: string }` slot and
-  read back through it with only `name`. An unchecked run with a wrong `Dynamic.of` panics on kind.
-  The JSON sketch above, run as a round-trip property test over generated values of generated types.
+  contract panic. Defaults filled by `makeRecord` with fresh evaluation per call, and the same for
+  `Type.default`, including a default that reads a variable, a default of a generic record at two
+  type arguments, a default of a local type, and each of its panics. The soundness cases: an empty
+  `Array[int]` boxed and unboxed as `Array[string]` panics, `Array[Circle]` is refused for an
+  `Array[Shape]` slot, and a `Person` is accepted for a `{ name: string }` slot and read back
+  through it with only `name`. An unchecked run with a wrong `Dynamic.of` panics on kind. The JSON
+  sketch above, run as a round-trip property test over generated values of generated types.
 - **Benchmarks.** Before acceptance, measure the sketch against hand-written decoders on a 1 MB
   configuration and a 10 MB array of records. Expect several times slower: one box per node, plus
   the `Json.Value` tree in between. If the follow-up needs speed, `Json.decode` can be native with
@@ -568,7 +583,7 @@ handles `Time.Instant` and other opaque types through a table of codecs keyed by
   the type arguments of a generic record. It needs a second, read-only box type that can never be
   unboxed into a container type, by the argument above. And encoding would no longer walk the same
   type as decoding, so round trips would not be guaranteed. `Json.stringify` already covers untyped
-  rendering. Open question 5 keeps the door open for debuggers.
+  rendering. Open question 4 keeps the door open for debuggers.
 - **Runtime-driven visitors, as in serde's `Deserializer`.** The runtime walks the type and calls a
   record of format callbacks, so no `Dynamic` is needed. But the walk order, the choice of union
   member, and the handling of missing fields are then fixed in the runtime, and every format that
@@ -617,16 +632,13 @@ handles `Time.Instant` and other opaque types through a table of codecs keyed by
 3. **Field metadata.** Renames such as `user_name` for `userName` have no place to live. Options are
    naming policies in each format (enough for most files), a field annotation syntax (new grammar),
    or a function on the type that returns a rename table (hook-based, see 2).
-4. **Exposing defaults.** `Type.Field` says whether a field has a default but not what it is. An
-   encoder that leaves out fields equal to their default (`omitempty` in spirit) would need
-   `Type.default(t, name): Dynamic`, which evaluates the default afresh, as a literal would.
-5. **Untyped inspection.** Debuggers, `assert`'s value rendering, and generic printers walk values
+4. **Untyped inspection.** Debuggers, `assert`'s value rendering, and generic printers walk values
    without a type. Today that is internal to the runtime. A read-only `Dynamic.inspect[T](v: T)`
    whose children could never be unboxed into containers would serve them. It is left out until a
    library needs it.
-6. **Frozen values.** If `frozen.md` is accepted, `Type.shape` needs a `Frozen` member or a flag,
+5. **Frozen values.** If `frozen.md` is accepted, `Type.shape` needs a `Frozen` member or a flag,
    and builders need a frozen variant or a rule that `freeze` applies afterwards.
-7. **The names.** `Dynamic` follows Haskell and Gleam, and `Reflect.Value` would follow Go.
+6. **The names.** `Dynamic` follows Haskell and Gleam, and `Reflect.Value` would follow Go.
    `Type.Erased` could be `Type.Any`, but that name suggests the top type that Ant does not have.
    Both names become prelude names that no program may shadow (section 10), so an existing
    `type Type` in user code would have to be renamed.

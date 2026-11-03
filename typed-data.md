@@ -508,8 +508,8 @@ removed.
 - **Every error at once**, as pydantic reports, as one message with a line per error.
 - **Non-string map keys and time values in `Type.Data`**, for MessagePack and CBOR keys and for TOML
   and YAML dates.
-- **Omitting defaults on encode**, `omitempty` in spirit, once `reflection.md` exposes defaults (its
-  open question 6).
+- **Omitting defaults on encode**, `omitempty` in spirit, which `reflection.md`'s `Type.default`
+  makes possible.
 
 ## Open questions
 
