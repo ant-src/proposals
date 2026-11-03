@@ -6,18 +6,20 @@
 
 Two additions, one for the run time and one for the checker.
 
-- **`x->f(a)`** calls the function `f` declared on the type of `x`'s tag: `p->norm()` is
-  `Point.norm(p)` when `p` is a `Point`. The interpreter finds `f` on the value's tag at the call,
-  so the same expression calls `Circle.area` or `Rect.area` according to what `s` holds.
-- **`interface Shape { area(s: Self): float64 }`** names a set of functions. A record or named
-  primitive type satisfies it by having those functions; nothing declares that it does. An interface
-  is a type, `Array[Shape]`, and a bound, `[T: Shape]`. It exists only in the checker: the
-  interpreter discards it as it discards an annotation.
+- **`x->f(a)`** calls `f` from the namespace of `x`'s type, with `x` first. `p->norm()` is
+  `Point.norm(p)` when `p` is a `Point`, `s->trim()` is `String.trim(s)`, and `xs->map(f)` is
+  `Array.map(xs, f)`. The interpreter finds the namespace from the value at the call, so the same
+  expression calls `Circle.area` or `Rect.area` according to what `s` holds.
+- **`interface Shape { area(s: Self): float64 }`** names a set of functions. Any type for which
+  those `->` calls resolve satisfies it; nothing declares that it does. An interface is a type,
+  `Array[Shape]`, and a bound, `[T: Shape]`. It exists only in the checker: the interpreter discards
+  it as it discards an annotation.
 
-The interpreter gains one rule, the `->` call, which is a field read of a tag that it already does
-for `Point.norm`. The checker gains an interface type and a satisfaction check. `interface` is
-already a reserved word, and `->` is unused. Types stay advisory: no evaluation rule consults a
-written type, and nothing is passed in behind the program's back.
+The interpreter gains one rule, the `->` call: find the receiver's namespace, read a field of it,
+and call. For a user type the namespace is the tag, which already holds the type's functions; for a
+built-in value it is a fixed table of kinds. The checker gains an interface type and a satisfaction
+check. `interface` is already a reserved word, and `->` is unused. Types stay advisory: no
+evaluation rule consults a written type, and nothing is passed in behind the program's back.
 
 This is a draft. Nothing here is part of the language.
 
@@ -68,9 +70,10 @@ report(Buffer.writer(buf), rows)      // every caller adapts
 The adapter is a second value. Two `Writer`s over one buffer are not `==`, since functions compare
 by identity, and a `Writer` cannot be narrowed back to a `Buffer`.
 
-A smaller irritation applies to every user type: a function on a type is always called through the
-type's name, `Point.norm(p)` or `p | Point.norm()`, so an editor cannot offer a value's functions,
-and code that holds a union or a type parameter has no call that picks the member's function.
+A smaller irritation applies to every value: a function is always called through a namespace's name,
+`Point.norm(p)`, `p | Point.norm()`, `s | String.trim()`, so an editor cannot offer a value's
+functions after the value, and code that holds a union or a type parameter has no call that picks
+the member's function.
 
 ## Prior art
 
@@ -97,10 +100,11 @@ table as the boundary tool, and in Ant the tag already is that table.
   `func f[T: Shape](x: T)` the interpreter does not know `T`; it knows `x`. So a call picks its
   function from its receiver's tag, and functions that would be picked by a result type, `T.zero()`
   or `T.parse(s)`, are out under any design that keeps types advisory.
-- **Only tagged values have functions of their own.** Records and named primitive values carry a
-  tag, and section 6 stores a type's functions on it. `int`, `string`, arrays, maps, functions and
-  the prelude's resources have no tag. `type Celsius = float64` is how a number gets functions, as
-  `type Celsius float64` is in Go.
+- **A value knows its kind and its tag, nothing more.** Records and named primitive values carry a
+  tag, and section 6 stores a type's functions on it. Strings, arrays, maps and the other built-in
+  kinds carry no tag, but the prelude already groups their functions in one namespace per kind,
+  almost all of them receiver first: `Array.map(xs, f)`, `Map.get(m, k)`, `Regex.find(p, s)`,
+  `Channel.send(c, v)`. A fixed table from kind to namespace is all `->` needs for them.
 - **`.` is a field read.** A record of closures calls `w.write(data)`, a field read and a call; that
   stays. A call of a function on a type needs its own token.
 - **Namespaces are closed.** Only a type's module declares its functions (section 6), so a type has
@@ -112,42 +116,60 @@ table as the boundary tool, and in Ant the tag already is that table.
 ### The `->` call
 
 `x->f(a, b)` is a postfix call, at the precedence of `.` and calls, so it chains:
-`p->scale(2.0)->norm()`. At run time it:
+`users->filter({ x.active })->map({ x.name })->sort()`. At run time it:
 
 1. evaluates `x`;
-2. reads the tag of the value: a record's tag, or a named primitive value's constructor. A value
-   with no tag panics: `int has no functions`;
-3. reads the function `f` declared on that type, which section 6 already stores on the tag. A tag
-   without one panics: `Circle has no function area`;
-4. evaluates the arguments and calls the function with `x` first.
+2. finds the value's namespace in the table below. A value with none panics: `int has no functions`;
+3. reads `f` from the namespace. A namespace without it panics: `Circle has no function area`;
+4. evaluates the arguments and calls `f` with `x` first.
 
-That is the whole run-time rule. `p->norm()` and `Point.norm(p)` call the same function when `p` is
-a `Point`, and the type name stays the way to call a function that is not on the receiver's type,
-such as `Point.origin()`. The interpreter checks neither signatures nor privacy, as for any field
-read of a tag.
+| Value                                                         | Namespace                                                                                                                                      |
+| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| a record or named primitive value of a user type              | its type: the tag, which holds the functions declared on it (§6)                                                                               |
+| a string, `Bytes`, `Html`, an array, a map, a set             | `String`, `Bytes`, `Html`, `Array`, `Map`, `Set`                                                                                               |
+| `Ok`, `Err`                                                   | `Result`                                                                                                                                       |
+| a value of a prelude type `N`, or of a type `N.T` it declares | `N`: `Mutex`, `Channel`, `Error`, …; `File` for `File.Handle`, `Time` for `Time.Instant`, `Regex` for `Regex.Pattern`, `Cmd` for `Cmd.Process` |
+| a number, `bool`, `null`, `void`, a function                  | none (open questions 7 and 8)                                                                                                                  |
+
+The table is the whole run-time rule. Its rows for the prelude are a list the prelude fixes, as it
+fixes its names, and a host's declaration file adds rows for the types it declares. `p->norm()` and
+`Point.norm(p)` call the same function when `p` is a `Point`, and a namespace's name stays the way
+to call any other function: `Point.origin()`, `Net.peer(h)`, `Json.stringify(v)`. The interpreter
+checks neither signatures nor privacy, as for any field read of a tag; an unchecked `h->write("x")`
+on a handle calls `File.write`, which takes a path, and panics there as any wrong call does.
 
 The checker resolves `x->f` by the static type of `x`:
 
-| Type of `x`                            | `f` is                                                                                      |
-| -------------------------------------- | ------------------------------------------------------------------------------------------- |
-| a named record or named primitive type | the function `f` on that type, if it is visible here                                        |
-| a union of those                       | `f` on every member; each must accept the arguments, and the result is the union of results |
-| an interface                           | the interface's `f`, with `Self` as the interface                                           |
-| a type parameter                       | as for its bound                                                                            |
-| anything else                          | a compile error: built-in kinds, anonymous record types, aliases' own functions             |
+| Type of `x`                          | `f` is                                                                                        |
+| ------------------------------------ | --------------------------------------------------------------------------------------------- |
+| a type with a namespace in the table | the function `f` of that namespace, if it is visible here and its first parameter accepts `x` |
+| a union whose every member has one   | `f` for every member; each must accept the arguments, and the result is the union of results  |
+| an interface                         | the interface's `f`, with `Self` as the interface                                             |
+| a type parameter                     | as for its bound                                                                              |
+| anything else                        | a compile error: numbers, functions, anonymous record types                                   |
+
+The first-parameter condition makes the few namespaces that mix receivers safe: `File` holds
+functions on paths and on handles, and `h->writeLine(line)` resolves while `h->write(text)` is a
+compile error. A function with no parameters, such as `Point.origin()`, is never reached by `->`.
 
 The union row is the field rule of section 4, Tagged unions, applied to functions: a union of types
-that each declare `area` can call `s->area()` without an interface. Its result must be a valid
-union.
+that each have `area` can call `s->area()` without an interface, and `Cmd | Cmd.Pipeline` calls into
+`Cmd` for both. Its result must be a valid union. A `Result` is a union of `Ok` and `Err`, both of
+which the table sends to `Result`, so `r->unwrapOr(0)` works.
 
-A function declared on an alias, `func Shape.area` with `type Shape = Circle | Rect`, is not reached
-by `->`. A `Shape` value carries `Circle`'s tag, and the interpreter looks there. It is still called
-as `Shape.area(s)`.
+A function a user declares on an alias, `func Shape.area` with `type Shape = Circle | Rect`, is not
+reached by `->`. A `Shape` value carries `Circle`'s tag, and the interpreter looks there. It is
+still called as `Shape.area(s)`. Only the prelude routes a union's members to one namespace, for
+`Result`.
 
-Named arguments apply when the checker knows the one function called: the receiver's static type is
-a named type. Through a union, an interface or a type parameter, the call is positional, since each
-implementation may name its parameters differently and the interpreter binds names against the
-function it finds.
+A named primitive value uses its own type's namespace, not its base's: `id->length()` on a `UserId`
+looks in `UserId`, as library functions take the base kinds today. `string(id)->length()` unwraps
+first.
+
+Named arguments apply when the checker knows the one function called: the receiver's type is not a
+union, an interface or a type parameter, so `ch->receive(ctx: c)` works. Through those three the
+call is positional, since each implementation may name its parameters differently and the
+interpreter binds names against the function it finds.
 
 `x?->f()` is not part of the proposal. A nullable receiver is narrowed first (open question 4).
 
@@ -174,22 +196,24 @@ first parameter of each is the receiver, of type `Self`, the satisfying type. Th
 one function, so no interface is satisfied by everything and none is a top type. An interface may
 take type parameters; its functions may not take their own.
 
-A type `S` satisfies `I` when `S` is a named record type or a named primitive type, and for each
-function `f` of `I`, `S` declares `f` (section 6), visible where the checker asks, whose type with
-`Self` replaced by `S` is assignable to `f`'s signature. No declaration says so. A generic record
-satisfies an interface for each instantiation its functions cover: `func Box.show[T](b: Box[T])`
-makes every `Box[X]` a `Show`.
+A type `S` satisfies `I` when, for each function `f` of `I`, `->f` on an `S` resolves (the checker
+table above) to a function visible where the checker asks, whose type with `Self` replaced by `S` is
+assignable to `f`'s signature. That is: `S` satisfies `I` when every call the interface promises
+checks on an `S`. No declaration says so. A generic type satisfies an interface for each
+instantiation its functions cover: `func Box.show[T](b: Box[T])` makes every `Box[X]` a `Show`.
+Built-in types satisfy interfaces by the same rule, so `string`, `Array[T]` and `Bytes` are all
+`interface Sized { length(s: Self): int }`, and a `File.Handle` is a `Sink` below without a wrapper.
 
 **As a type.** An interface whose functions mention `Self` only as the receiver is a type. A value
 of a satisfying type is assignable to it, as is a union whose every member satisfies it, and so is a
 value of an interface that has all of its functions. Containers stay invariant: `Array[Circle]` is
 not an `Array[Shape]`, and `[...circles]` widens. An interface value is the value itself, with no
-box: `==`, `String.from` and `Json.stringify` see the record. `is` narrows it to a satisfying type,
+box: `==`, `String.from` and `Json.stringify` see the value. `is` narrows it to a satisfying type,
 and the `else` branch keeps the interface, since the set of satisfying types is open:
 
 ```ant
 var shapes: Array[Shape] = [Circle{ radius: 1.0 }, Rect{ width: 2.0, height: 3.0 }]
-var total = shapes | Array.map({ x->area() }) | Array.sum()
+var total = shapes->map({ x->area() })->sum()
 
 for s in shapes {
   if s is Circle { println(s.radius) }
@@ -208,7 +232,7 @@ type Job = { priority: int, name: string }
 
 func Job.compare(a: Job, b: Job): int { b.priority - a.priority }
 
-func sorted[T: Compare](xs: Array[T]): Array[T] { Array.sortWith(xs, func(a: T, b: T): int { a->compare(b) }) }
+func sorted[T: Compare](xs: Array[T]): Array[T] { xs->sortWith(func(a: T, b: T): int { a->compare(b) }) }
 
 var queue: Array[Compare] = []       // compile error: Compare is a bound only
 ```
@@ -231,40 +255,37 @@ The spec gets one paragraph of guidance:
 
 - A closed set of variants is a union, narrowed with `is` and checked for exhaustion.
 - An open set is an interface, called with `->`.
-- A function on the receiver's own type is called with `->`; any other function, a module's, a
-  namespace's, or a library's on a built-in kind, through `|` or a plain call.
+- A function from the receiver's own namespace is called with `->`: `xs->map(f)`, `p->norm()`. Any
+  other function, a module's or another namespace's, is called plainly or through `|`:
+  `seq | Iter.take(5)`, `v | Json.stringify()`, `n | Port`.
 - State captured at construction, such as a handler and its configuration, stays a record of
   closures.
 
 ## Examples
 
-A sink with a test double and no adapter:
+A sink that a file handle satisfies as it is, with a test double:
 
 ```ant
 // log.ant
 export interface Sink {
-  write(s: Self, line: string): Result[void, Error]
+  writeLine(s: Self, line: string): Result[void, Error]
 }
 
-export func info(sink: Sink, msg: string): Result[void, Error] { sink->write("info ${msg}") }
+export func info(sink: Sink, msg: string): Result[void, Error] { sink->writeLine("info ${msg}") }
 
 // main.ant
 import "./log.ant" { info }
 
-type FileSink = { handle: File.Handle }
-
-func FileSink.write(s: FileSink, line: string): Result[void, Error] { File.writeLine(s.handle, line) }
-
-var out = FileSink{ handle: try File.create("app.log") }
-try info(out, "started")
+var out = try File.create("app.log")
+try info(out, "started")                     // File.writeLine makes File.Handle a Sink
 
 // log_test.ant
 import "./log.ant" { info }
 
 type Memory = { lines: Array[string] = [] }
 
-func Memory.write(m: Memory, line: string): Result[void, Error] {
-  Array.push(m.lines, line)
+func Memory.writeLine(m: Memory, line: string): Result[void, Error] {
+  m.lines->push(line)
   Result.ok(void)
 }
 
@@ -281,7 +302,7 @@ A user ordering in a generic container:
 type Heap[T] = { items: Array[T] = [] }
 
 func Heap.push[T: Compare](h: Heap[T], v: T): void {
-  Array.push(h.items, v)
+  h.items->push(v)
   var i = len(h.items) - 1
   while i > 0 && h.items[i]->compare(h.items[(i - 1) / 2]) < 0 {
     var p = (i - 1) / 2
@@ -294,6 +315,23 @@ var jobs: Heap[Job] = Heap{}
 jobs->push(Job{ priority: 2, name: "build" })
 ```
 
+Library calls on built-in values, before and after:
+
+```ant
+var names = users
+  | Array.filter({ x.age >= 18 })
+  | Array.map({ x.name })
+  | Array.sort()
+
+var names = users
+  ->filter({ x.age >= 18 })
+  ->map({ x.name })
+  ->sort()
+
+var port = (m | Map.get("port")) ?? "80" | String.trim()
+var port = (m->get("port") ?? "80")->trim()
+```
+
 ## Spec changes
 
 - §2 Lexical structure: `interface` moves from reserved words to keywords; `->` is a token; `Self`
@@ -302,12 +340,16 @@ jobs->push(Job{ priority: 2, name: "build" })
   row in the table of Kinds; Generics drops "There are no interfaces" and gains interface bounds;
   Assignability gains the interface rules; Type declarations drops "interfaces" from "no classes,
   interfaces, or prototypes"; the guidance paragraph above.
-- §5 Expressions: the `->` call, its checker table, and its precedence. Pipes: "The pipe replaces
-  method chaining" becomes "The pipe chains calls of any function; `->` chains calls of a value's
-  own functions."
+- §5 Expressions: the `->` call, its two tables, and its precedence. Pipes: "The pipe replaces
+  method chaining" becomes "`->` chains calls of a value's own namespace; the pipe chains calls of
+  any other function."
 - §6 Functions on types: "There is no method call" becomes the `->` call; functions on aliases are
   reached only through the alias's name.
+- §10 Declaration files: a host's declaration file names the namespace of each type it declares.
+- §11 Standard library: the prelude's rows of the namespace table; examples move from
+  `xs | Array.map(f)` to `xs->map(f)`.
 - §12 Dynamic semantics: the four steps of `->` and its two panics.
+- `stdlib.md`: its types' rows, and its examples, as in §11.
 - `fmt.md`: the declaration, and breaking a chain before `->`. `doc.md`: an interface's page, and
   the interfaces a type satisfies among those its module sees. `lsp.md`: completion after `->`, go
   to implementations of an interface function.
@@ -315,20 +357,18 @@ jobs->push(Job{ priority: 2, name: "build" })
 ## Implementation
 
 - **Parser:** the `->` postfix, the `interface` declaration, `Self`.
-- **Interpreter:** the `->` call, a few lines beside the field read. Interface declarations are
+- **Interpreter:** the `->` call: a switch on the value's kind, and for a tagged value a pointer
+  from the tag to its namespace, which is the tag itself for a user type. Interface declarations are
   dropped like annotations. Nothing else.
 - **Checker:** most of the work: the resolution table for `->`, the interface type, satisfaction,
   assignability, type or bound, `is` narrowing from an interface, the union rule. Satisfaction can
   be cached per type and interface.
 - **Tools:** `ant fmt`, `ant doc`, LSP completion and implementations, the editor grammars
-  (vscode-ant, nvim-ant, intellij-ant, the Monaco package), the site.
+  (vscode-ant, nvim-ant, intellij-ant, the Monaco package), the site and its examples. A rewrite
+  from `x | N.f(…)` to `x->f(…)` needs types, so it is an LSP code action, not `ant fmt`.
 
 ## Non-goals
 
-- **`->` on built-in kinds.** `"abc"->trim()` would need a map from each kind to a prelude
-  namespace, and the namespaces are not organized by receiver: `File.write` takes a path, not a
-  handle, and numbers have no namespace. It would also make `|` nearly redundant. Library calls stay
-  `s | String.trim()`.
 - **Changing `.`.** `x.f` stays a field read, and `x.f()` calls a function stored in a field.
 - **Dispatch by result type** (`T.zero()`, `T.parse(s)`). It needs types at run time.
 - **Default implementations, explicit `implements`, embedding with `...`, generic interface
@@ -341,8 +381,9 @@ jobs->push(Job{ priority: 2, name: "build" })
   `Array.sort` take user types, and `typed-data.md`'s `fromData`/`toData`/`validate`, as interfaces
   with checked signatures instead of names. Each changes what a built-in function does to a record,
   so each is its own decision.
-- **I/O interfaces** over `File.Handle`, network connections and user types, as in Go. Prelude
-  resources have no tag, so this needs `->` on them, which is the built-in-kinds question again.
+- **I/O interfaces in the prelude**, `Io.Reader` and `Io.Writer` as in Go. A user can already
+  declare one that `File.Handle` satisfies; the prelude version needs its `File` and `Net` functions
+  named consistently across handles and connections.
 - **Embedding**, `interface ReadWriter { ...Reader, ...Writer }`, if listing the functions again
   proves common.
 - **Generic interface functions.** The interpreter would need nothing, since `->` ignores type
@@ -356,11 +397,18 @@ jobs->push(Job{ priority: 2, name: "build" })
 2. **Bound or type for `Self`-receiver interfaces.** `func total(xs: Array[Shape])` and
    `func total[T: Shape](xs: Array[T])` overlap. The rule here follows Go: take the interface type,
    and use a bound when the result must keep `T`.
-3. **Two spellings for one call.** `p->norm()` and `p | Point.norm()` call the same function. The
-   guidance picks `->`; `ant fmt` cannot enforce it without types, but the checker or the LSP could
-   suggest it.
+3. **Two spellings for one call.** `xs->map(f)` and `xs | Array.map(f)` call the same function. The
+   guidance picks `->`; `ant fmt` cannot enforce it without types, but the checker could warn and
+   the LSP offer the rewrite. The stricter choice is a compile error for a pipe or a plain call into
+   the receiver's own namespace, which makes `->` the only spelling.
 4. **Nullable receivers.** `x?->f()`, yielding `null` when `x` is `null`, as `?.` does for fields.
 5. **Accidental satisfaction.** A type with a `close` of the right shape satisfies every `Closer`.
    Go accepts this; `typed-data.md` rejected hooks that a function could become by accident. The two
    proposals should agree.
 6. **`Self`.** A reserved word, or a type name only inside interface bodies.
+7. **Numbers.** No namespace today. Mapping every numeric kind to `Math` would give `x->abs()` and
+   `x->sqrt()`, but `Math` also holds `Math.random()` and functions on `float64` only, and `Bits`
+   would be left out. The alternative is nothing, and `Math.abs(x)` as now.
+8. **Sequences.** A `Seq[T]` is a function, so `seq->filter(f)` would mean every function value
+   searches `Iter`. Useful for pipelines, odd for every other function. The alternative is
+   `seq | Iter.filter(f)` as now.
