@@ -169,7 +169,8 @@ a == type(int64)                          // true: int is an alias of int64
   written with: `Array[Config]`, `int | null`, `Json.Value`.
 
 `Type.Erased` is a type value whose static type is unknown, and `Type.erase(t)` is the conversion
-from `Type[T]`. Format code recurses on erased types, since the element type of an `Array[E]` is not
+from `Type[T]`. The conversion is always written: `Type[T]` is not assignable to `Type.Erased` (see
+Alternatives). Format code recurses on erased types, since the element type of an `Array[E]` is not
 known statically one level down. The typed form is needed at the two ends only: the caller's
 `type(T)` and the final `Dynamic.to`.
 
@@ -231,7 +232,7 @@ type Type.Opaque = { name: string }
 - **Records.** `name` is the declared name, or `null` for an anonymous record type. `args` are the
   type arguments, and `fields` come in declaration order, with each field's type already
   substituted: in `Box[int]`, the field `value` has type `int`. `hasDefault` says whether a literal,
-  and so a builder, may leave the field out. The default itself is not exposed (open question 5).
+  and so a builder, may leave the field out. The default itself is not exposed (open question 4).
 - **Named primitives.** `Id[User]` and `Id[Account]` share a tag (section 4) but are different type
   values, because their `args` differ.
 - **Unions.** Members are flattened and deduplicated, aliases are expanded, and the members come in
@@ -550,7 +551,7 @@ handles `Time.Instant` and other opaque types through a table of codecs keyed by
 - **No making types at run time.** Unlike Zig's `@Type`, a program cannot create a record type that
   no declaration wrote.
 - **No field metadata.** There are no struct tags or attributes for renaming fields. A format offers
-  naming policies as options, and per-field renames wait for open question 4.
+  naming policies as options, and per-field renames wait for open question 3.
 - **No format policy.** Unions, missing and unknown fields, key case, numbers, and the encodings of
   `Bytes` and time belong to each format's proposal.
 
@@ -567,7 +568,7 @@ handles `Time.Instant` and other opaque types through a table of codecs keyed by
   the type arguments of a generic record. It needs a second, read-only box type that can never be
   unboxed into a container type, by the argument above. And encoding would no longer walk the same
   type as decoding, so round trips would not be guaranteed. `Json.stringify` already covers untyped
-  rendering. Open question 6 keeps the door open for debuggers.
+  rendering. Open question 5 keeps the door open for debuggers.
 - **Runtime-driven visitors, as in serde's `Deserializer`.** The runtime walks the type and calls a
   record of format callbacks, so no `Dynamic` is needed. But the walk order, the choice of union
   member, and the handling of missing fields are then fixed in the runtime, and every format that
@@ -594,36 +595,38 @@ handles `Time.Instant` and other opaque types through a table of codecs keyed by
 - **Schemas in a library**, in the style of Zod. Declaring `ConfigSchema` beside `Config` writes the
   type twice, and Ant cannot infer one from the other the way TypeScript's `z.infer` does. Keeping
   the declaration's own body gives the schema at no cost.
-- **Making `Type[T]` assignable to `Type.Erased`.** This would remove the `Type.erase` calls, at the
-  cost of one more assignability rule in section 4. It is open question 1.
+- **Making `Type[T]` assignable to `Type.Erased`.** This would remove the `Type.erase` calls, and it
+  would be sound, since an erased type exposes nothing typed. But it would be the one implicit
+  conversion in section 4's assignability rules, made for one library. `never` is assignable to
+  everything because it is the bottom type, not as a conversion, and Ant converts nothing
+  implicitly, not even numbers. The calls are few and only in format code: one at the entry
+  (`Type.erase(t)`) and one per type constant, written once as a `let`. Callers write
+  `decode(text, type(Config))` and never erase. An explicit `Type.erase` also marks where the static
+  type is given up, as `Dynamic.to` marks where it comes back.
 
 ## Open questions
 
-1. **Implicit erasure.** Should `Type[T]` be assignable to `Type.Erased`, as `never` is to
-   everything? It is sound, since an erased type exposes nothing typed, and it would make
-   `Type.shape(type(Server))` read directly. Against it: it is a special case in a list of rules
-   that has none.
-2. **A deep `Dynamic.of` check under `ant run`.** It would catch a mistyped unchecked program at the
+1. **A deep `Dynamic.of` check under `ant run`.** It would catch a mistyped unchecked program at the
    box rather than at a later field read. It costs time proportional to the value's size in checked
    programs too, unless it is limited to unchecked runs, and nothing else in the runtime works that
    way.
-3. **Per-type hooks.** The functions declared on a type are fields of its tag (section 6), so
+2. **Per-type hooks.** The functions declared on a type are fields of its tag (section 6), so
    reflection could offer `Type.function(t, "fromJson")` for Go-style `MarshalJSON` hooks by naming
    convention. This draft leaves hooks to codec tables keyed by type value, which are explicit and
    need no convention. Calling a function found by name would also need `Dynamic.call`.
-4. **Field metadata.** Renames such as `user_name` for `userName` have no place to live. Options are
+3. **Field metadata.** Renames such as `user_name` for `userName` have no place to live. Options are
    naming policies in each format (enough for most files), a field annotation syntax (new grammar),
-   or a function on the type that returns a rename table (hook-based, see 3).
-5. **Exposing defaults.** `Type.Field` says whether a field has a default but not what it is. An
+   or a function on the type that returns a rename table (hook-based, see 2).
+4. **Exposing defaults.** `Type.Field` says whether a field has a default but not what it is. An
    encoder that leaves out fields equal to their default (`omitempty` in spirit) would need
    `Type.default(t, name): Dynamic`, which evaluates the default afresh, as a literal would.
-6. **Untyped inspection.** Debuggers, `assert`'s value rendering, and generic printers walk values
+5. **Untyped inspection.** Debuggers, `assert`'s value rendering, and generic printers walk values
    without a type. Today that is internal to the runtime. A read-only `Dynamic.inspect[T](v: T)`
    whose children could never be unboxed into containers would serve them. It is left out until a
    library needs it.
-7. **Frozen values.** If `frozen.md` is accepted, `Type.shape` needs a `Frozen` member or a flag,
+6. **Frozen values.** If `frozen.md` is accepted, `Type.shape` needs a `Frozen` member or a flag,
    and builders need a frozen variant or a rule that `freeze` applies afterwards.
-8. **The names.** `Dynamic` follows Haskell and Gleam, and `Reflect.Value` would follow Go.
+7. **The names.** `Dynamic` follows Haskell and Gleam, and `Reflect.Value` would follow Go.
    `Type.Erased` could be `Type.Any`, but that name suggests the top type that Ant does not have.
    Both names become prelude names that no program may shadow (section 10), so an existing
    `type Type` in user code would have to be renamed.
