@@ -347,7 +347,7 @@ The same pattern gives environment variables (`Type.shape` for the field names, 
 Not part of the proposal yet; written down to decide later. The `key` option renames every field of
 a call by one policy, which is too blunt: a program that talks to an API wants `maxTokens` in Ant
 and `max_tokens` on the wire, and the name belongs next to the field, not at every call. Field
-annotations would put it there. They would also answer `reflection.md`'s open question 5, Field
+annotations would put it there. They would also answer `reflection.md`'s open question 3, Field
 metadata, so the syntax and its reflection belong there, and the annotations this layer honors
 belong here.
 
@@ -453,7 +453,7 @@ removed.
 - **Reference.** Write `Type.build` and `Type.data` first as Ant code over `reflection.md`'s
   `Dynamic`, extending its JSON sketch to `Type.Data`. That pins the semantics down in terms of the
   lower layer and proves that layer sufficient. Calling hooks from Ant needs `Dynamic.call` or a
-  codec table (`reflection.md`, open question 4); the reference uses a table built from the tags.
+  codec table (`reflection.md`, open question 2); the reference uses a table built from the tags.
 - **Native.** Then implement both in Go over the same descriptors, since every format on this path
   goes through them. `reflection.md` expects the Ant walk to be several times slower than
   hand-written decoders; native code removes the box per node. Run the reference and the native
