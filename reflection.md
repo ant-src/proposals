@@ -6,15 +6,15 @@
 
 Add one expression form and two prelude types.
 
-- `type T`, written where an expression goes, is the type `T` as a value. Its static type is
-  `Type[T]`. `Json.decode(text, type Array[Config])` is how a caller will say what it wants.
+- `type(T)`, written where an expression goes, is the type `T` as a value. Its static type is
+  `Type[T]`. `Json.decode(text, type(Array[Config]))` is how a caller will say what it wants.
 - `Type.shape(t)` takes a type value apart one level at a time: a record's fields with their types
   and whether they have a default, an array's element type, a union's members, a named primitive's
   base.
 - `Dynamic` is a value together with a type it belongs to, the one way to hold a value whose type is
-  known only at run time. `Dynamic.of(v, type T)` boxes, `Dynamic.to(d, type T)` unboxes, a handful
-  of readers take a dynamic value apart along its type, and a handful of builders put new values
-  together from dynamic parts, checking each part's type against its slot.
+  known only at run time. `Dynamic.of(v, type(T))` boxes, `Dynamic.to(d, type(T))` unboxes, a
+  handful of readers take a dynamic value apart along its type, and a handful of builders put new
+  values together from dynamic parts, checking each part's type against its slot.
 
 The interpreter still discards every annotation. What it keeps is a `type` declaration's body, as
 the syntax the parser already built, and it turns that syntax into a type value only when reflection
@@ -71,7 +71,7 @@ Three lessons shape the proposal:
 - **Under erasure, the caller passes the type.** Java has worked this way since generics arrived,
   through `Class<T>` and super type tokens. Kotlin hides the token behind `reified`, and Go added
   `reflect.TypeFor[T]()` for generic code. Ant's checker never runs under `ant run`, so nothing can
-  hide the token: the program writes it, as `type T`.
+  hide the token: the program writes it, as `type(T)`.
 - **A box that remembers its type is sound, and a check of the contents is not.** Unboxing in
   Haskell's `fromDynamic` compares the stored type, and Go's `reflect.Value` keeps its type beside
   the value. Without the stored type, unboxing would have to inspect the contents, and in a language
@@ -108,7 +108,7 @@ Three lessons shape the proposal:
 | Union members are distinguishable  | Strong | The union rules guarantee that a value's kind or tag names exactly one member. So the readers can always resolve a union to its member, and encoders never see a union                       |
 | Field defaults on the tag          | Strong | Tags already keep defaults, so a builder fills omitted fields exactly as a literal does, and a decoder can tell a missing field from a missing value                                         |
 | One obvious way                    | Good   | One spelling for a type as a value, one box, and one structural view. The cost is two type-value types: `Type[T]` for the typed ends and `Type.Erased` for recursion                         |
-| Minimal syntax                     | Good   | One expression form. `type` is already a keyword, and the form is decided by position: at the start of a statement it declares, anywhere else it denotes                                     |
+| Minimal syntax                     | Good   | One expression form. `type` is already a keyword, and the next token decides the form: a name declares, `(` denotes                                                                          |
 | Library close to Go                | Good   | `Dynamic` corresponds to `reflect.Value`, and the builders correspond to `reflect.New`, `MakeSlice`, and `MakeMap`. Ant has no `TypeOf(x)`, no struct tags, and no settable values           |
 | Interpreter stays simple           | Fair   | It needs a type-value representation, lazy resolution of declaration bodies, and assignability on closed types. That last one is a small copy of a checker rule, which tests keep in step    |
 | A checked program panics on values | Good   | Builders and unboxing panic only on contract violations by the calling library, which can always test first with `Type.shape` and `Type.assignable`                                          |
@@ -118,31 +118,37 @@ Three lessons shape the proposal:
 
 ### Type values
 
-`type T` in expression position is a **type expression**. `T` is any type that an annotation could
-hold, and the type extends as far as a type can, as a function type's result does (section 4). So
-`type int | null` is the union, and `(type int) | f()` pipes a type value. At the start of a
-statement `type` still begins a declaration. A type expression would be useless there anyway, and
-the rule takes one token to decide.
+`type(T)` is a **type expression**. `T` is any type that an annotation could hold, and the
+parentheses end it, so `type(int | null)` is the union and `type(int) | f()` pipes a type value.
+`type` followed by `(` is always a type expression, and `type` followed by a name is always a
+declaration, since a declaration cannot start with `(`. One token decides, wherever the form
+appears, so a block or an `if` branch can end in one:
+`if wide { type(int64) } else { type(int32) }`.
+
+`type(...)` is a keyword form, not a call. Its contents are type syntax, and `type` alone is not a
+value that could be passed or piped. It takes a type, never a value: unlike Python's `type(x)` or
+JavaScript's `typeof x`, it does not ask what a value is (see Non-goals). `type(config)` is a
+compile error that says so: "`type(...)` takes a type, not a value".
 
 ```ant
-var a = type int                          // Type[int]
-var b = type Array[Config]                // Type[Array[Config]]
-var c = type int | null                   // Type[int | null]
-var d = type Map[string, Array[int]]
+var a = type(int)                         // Type[int]
+var b = type(Array[Config])               // Type[Array[Config]]
+var c = type(int | null)                  // Type[int | null]
+var d = type(Map[string, Array[int]])
 println(b)                                // Array[Config]
-a == type int64                           // true: int is an alias of int64
+a == type(int64)                          // true: int is an alias of int64
 ```
 
-- **Static type.** `type T` has type `Type[T]`. `Type[T]` is invariant like every generic type, and
+- **Static type.** `type(T)` has type `Type[T]`. `Type[T]` is invariant like every generic type, and
   `T` is solved from the argument as usual, so `func decode[T](text: string, t: Type[T])` called as
-  `decode(text, type Config)` returns a `Config`.
+  `decode(text, type(Config))` returns a `Config`.
 - **Closed types only.** `T` may not mention a type parameter of an enclosing function or type
   (including a default in a generic record), since the runtime has nothing bound to that name. This
   is a compile error that says to take a `Type[T]` parameter instead. A generic type needs its
-  arguments, as in an annotation, so `type Box` is a compile error and `type Box[int]` is fine.
+  arguments, as in an annotation, so `type(Box)` is a compile error and `type(Box[int])` is fine.
 - **A type name alone is still not a value.** Section 4's rule stands: `Config` in expression
   position remains a compile error except as a literal head, an `is` target, a namespace, or a
-  constructor. `type Config` is the value.
+  constructor. `type(Config)` is the value.
 - **Evaluation.** The runtime resolves the type's names as `is` does (section 12): primitive names,
   `Array`, `Map`, `Set`, `Bytes`, and `func` by name, and any other path by evaluating it to a tag
   or a constructor. A name that resolves to neither panics in an unchecked program. Names in a type
@@ -161,7 +167,7 @@ a == type int64                           // true: int is an alias of int64
 `Type.Erased` is a type value whose static type is unknown, and `Type.erase(t)` is the conversion
 from `Type[T]`. Format code recurses on erased types, since the element type of an `Array[E]` is not
 known statically one level down. The typed form is needed at the two ends only: the caller's
-`type T` and the final `Dynamic.to`.
+`type(T)` and the final `Dynamic.to`.
 
 ### What the interpreter keeps
 
@@ -179,18 +185,18 @@ had already parsed. A local type's body names only types of its block (section 4
 declarations), whose tags are the same on every run, so resolving the body once is correct for every
 run.
 
-The prelude's declarations come from `prelude.d.ant` in the same way, so `type Result[int, Error]`,
-`type Json.Value`, and `type Panic` have bodies. An opaque type, written `type Regex.Pattern` with
+The prelude's declarations come from `prelude.d.ant` in the same way, so `type(Result[int, Error])`,
+`type(Json.Value)`, and `type(Panic)` have bodies. An opaque type, written `type Regex.Pattern` with
 no body, stays opaque.
 
 Annotations on variables, parameters, and results are still discarded, so a function value cannot
 report its signature. A function is reflected only at a type the program writes:
-`Dynamic.of(f, type func(int): string)`.
+`Dynamic.of(f, type(func(int): string))`.
 
 ### Type shapes
 
 ```
-type Type[T]                                     // opaque: the type T as a value, written `type T`
+type Type[T]                                     // opaque: the type T as a value, written `type(T)`
 type Type.Erased                                 // opaque: a type value of unknown static type
 
 Type.erase[T](t: Type[T]): Type.Erased
@@ -221,7 +227,7 @@ type Type.Opaque = { name: string }
 - **Records.** `name` is the declared name, or `null` for an anonymous record type. `args` are the
   type arguments, and `fields` come in declaration order, with each field's type already
   substituted: in `Box[int]`, the field `value` has type `int`. `hasDefault` says whether a literal,
-  and so a builder, may leave the field out. The default itself is not exposed (open question 6).
+  and so a builder, may leave the field out. The default itself is not exposed (open question 5).
 - **Named primitives.** `Id[User]` and `Id[Account]` share a tag (section 4) but are different type
   values, because their `args` differ.
 - **Unions.** Members are flattened and deduplicated, aliases are expanded, and the members come in
@@ -230,7 +236,7 @@ type Type.Opaque = { name: string }
 - **Opaque.** Everything whose values reflection does not take apart: `Bytes`, `Html`,
   `Regex.Pattern`, the time types, the sync, random, and resource types, the opaque types of a
   declaration file, `Type[T]`, `Type.Erased`, and `Dynamic`. `name` renders the type. A format tests
-  for a type it handles by comparing type values, `t == Type.erase(type Bytes)`, rather than by
+  for a type it handles by comparing type values, `t == Type.erase(type(Bytes))`, rather than by
   name.
 - **One level.** Children are `Type.Erased` values, so a recursive type is a finite graph that a
   program walks as deep as it needs.
@@ -238,7 +244,7 @@ type Type.Opaque = { name: string }
 ```ant
 type Server = { host: string, port: int = 8080, tags: Array[string] = [] }
 
-var s = Type.shape(Type.erase(type Server))
+var s = Type.shape(Type.erase(type(Server)))
 if s is Type.Record {
   for f in s.fields { println("${f.name}: ${f.type}, default: ${f.hasDefault}") }
 }
@@ -359,7 +365,7 @@ passes the checker as written.
 ```ant
 // typed.ant: JSON into and out of declared types, as library code
 
-let BytesType = Type.erase(type Bytes)
+let BytesType = Type.erase(type(Bytes))
 
 export func decode[T](text: string, t: Type[T]): Result[T, Error] {
   var tree = try Json.parse(text)
@@ -375,7 +381,7 @@ func decodeAt(t: Type.Erased, v: Json.Value, path: string): Result[Dynamic, Erro
   if t == BytesType {
     if !(v is string) { return fail(path, "want a base64 string") }
     var b = try (Encoding.fromBase64(v) | Result.wrapErr(path))
-    return Result.ok(Dynamic.of(b, type Bytes))
+    return Result.ok(Dynamic.of(b, type(Bytes)))
   }
   var s = Type.shape(t)
   if s is Type.Union {
@@ -385,11 +391,11 @@ func decodeAt(t: Type.Erased, v: Json.Value, path: string): Result[Dynamic, Erro
     }
     fail(path, "want ${t}")
   } else if s is Type.Null {
-    if v == null { Result.ok(Dynamic.of(null, type null)) } else { fail(path, "want null") }
+    if v == null { Result.ok(Dynamic.of(null, type(null))) } else { fail(path, "want null") }
   } else if s is Type.Bool {
-    if v is bool { Result.ok(Dynamic.of(v, type bool)) } else { fail(path, "want true or false") }
+    if v is bool { Result.ok(Dynamic.of(v, type(bool))) } else { fail(path, "want true or false") }
   } else if s is Type.String {
-    if v is string { Result.ok(Dynamic.of(v, type string)) } else { fail(path, "want a string") }
+    if v is string { Result.ok(Dynamic.of(v, type(string))) } else { fail(path, "want a string") }
   } else if s is Type.Int || s is Type.Float {
     var n = if v is float64 { Dynamic.makeNumber(t, v) } else { null }
     if n == null { fail(path, "want ${t}") } else { Result.ok(n) }
@@ -425,7 +431,7 @@ export func encode[T](value: T, t: Type[T]): string {
 
 func encodeAt(d: Dynamic): string {
   var t = Dynamic.type(d)
-  if t == BytesType { return Json.stringify(Encoding.toBase64(Dynamic.to(d, type Bytes))) }
+  if t == BytesType { return Json.stringify(Encoding.toBase64(Dynamic.to(d, type(Bytes)))) }
   var s = Type.shape(t)
   if s is Type.Record {
     var members = Array.map(s.fields, {
@@ -452,9 +458,9 @@ type Server = { host: string, port: int = 8080, tags: Array[string] = [] }
 type Config = { servers: Array[Server], debug: bool = false }
 
 var text = try File.read("app.json")
-var config = try decode(text, type Config)       // a Config
+var config = try decode(text, type(Config))      // a Config
 println(config.servers[0].port)                  // 8080 when the file leaves it out
-println(encode(config, type Config))
+println(encode(config, type(Config)))
 ```
 
 Some notes on the sketch. Maps and sets decode as arrays and records do and are left out for length.
@@ -463,7 +469,7 @@ A map key decodes through `decodeAt` too, since a JSON key is a `string` and `st
 `$.servers[2].port: want int`. A real encoder rejects a map key whose text is not a JSON string, and
 handles `Time.Instant` and other opaque types through a table of codecs keyed by type value
 (`Map[Type.Erased, Codec]`), which works because type values are `==` and hash. A codec decodes with
-`Time.parseInstant` and boxes with `Dynamic.of(instant, type Time.Instant)`.
+`Time.parseInstant` and boxes with `Dynamic.of(instant, type(Time.Instant))`.
 
 ## Spec changes
 
@@ -471,8 +477,8 @@ handles `Time.Instant` and other opaque types through a table of codecs keyed by
   field names in order, and each `type` declaration's body, which it resolves only for a type
   expression. "No evaluation rule consults a written type" gets the exception "except a type
   expression and the reflection functions".
-- **Section 2.** `type` at the start of a statement begins a declaration, and anywhere else it
-  begins a type expression. The keyword list does not change.
+- **Section 2.** `type` followed by a name begins a declaration, and `type` followed by `(` begins a
+  type expression. The keyword list does not change.
 - **Section 4, Checking and running and Type declarations.** The body is kept, not discarded. "A
   type name is an expression only as …" gains a pointer to type expressions, and its own rule
   stands.
@@ -481,12 +487,11 @@ handles `Time.Instant` and other opaque types through a table of codecs keyed by
   dynamic, no `is`, `==` by type and value, rendered as `Dynamic(v: T)`).
 - **Section 4, new subsection "Types as values".** Type expressions, closedness, equality, laziness,
   and `Type.Erased`.
-- **Section 5.** Type expressions in the expression grammar, with the rule that the type extends as
-  far as it can.
+- **Section 5.** `type ( Type )` in the expression grammar, as a primary expression.
 - **Section 11, new subsection "Type and Dynamic".** The listing above, the invariant, and the
   builder and reader rules.
 - **Section 12.** In Values, the kinds type and dynamic, and a tag's kept body. In Expressions, the
-  evaluation of `type T`. In Runtime panics, the type expression's name resolution in the
+  evaluation of `type(T)`. In Runtime panics, the type expression's name resolution in the
   checker-ruled-out column, and the documented panics of the `Dynamic` functions in the last column.
 - **stdlib.md, Json.** Replace "Typed decoding through reflection is deferred …" with a pointer to
   this section and to the JSON follow-up.
@@ -541,7 +546,7 @@ handles `Time.Instant` and other opaque types through a table of codecs keyed by
 - **No making types at run time.** Unlike Zig's `@Type`, a program cannot create a record type that
   no declaration wrote.
 - **No field metadata.** There are no struct tags or attributes for renaming fields. A format offers
-  naming policies as options, and per-field renames wait for open question 5.
+  naming policies as options, and per-field renames wait for open question 4.
 - **No format policy.** Unions, missing and unknown fields, key case, numbers, and the encodings of
   `Bytes` and time belong to each format's proposal.
 
@@ -549,7 +554,7 @@ handles `Time.Instant` and other opaque types through a table of codecs keyed by
 
 - **Cast by inspection.** Drop the type from `Dynamic` and let `Dynamic.to` check the contents
   deeply. This is unsound with mutable containers. An empty `xs: Array[int]` passes a deep check as
-  `Array[string]`. After `var ys = Dynamic.to(d, type Array[string])` and `Array.push(ys, "a")`,
+  `Array[string]`. After `var ys = Dynamic.to(d, type(Array[string]))` and `Array.push(ys, "a")`,
   `xs[0]` is a string that the checker typed as an `int`. Generic records have the same hole when
   they hold an empty array. Checking contents is sound only for immutable values, and it costs time
   proportional to their size. Storing the type is sound and costs one comparison.
@@ -558,7 +563,7 @@ handles `Time.Instant` and other opaque types through a table of codecs keyed by
   the type arguments of a generic record. It needs a second, read-only box type that can never be
   unboxed into a container type, by the argument above. And encoding would no longer walk the same
   type as decoding, so round trips would not be guaranteed. `Json.stringify` already covers untyped
-  rendering. Open question 7 keeps the door open for debuggers.
+  rendering. Open question 6 keeps the door open for debuggers.
 - **Runtime-driven visitors, as in serde's `Deserializer`.** The runtime walks the type and calls a
   record of format callbacks, so no `Dynamic` is needed. But the walk order, the choice of union
   member, and the handling of missing fields are then fixed in the runtime, and every format that
@@ -568,6 +573,14 @@ handles `Time.Instant` and other opaque types through a table of codecs keyed by
   run-time value already. It covers named records only, not `Array[Config]`, `int | null`, or
   `Map[string, Server]`, and it would undo section 4's rule that a type name is not a value. The
   `type` prefix covers every type with one rule.
+- **`type T` without parentheses**, the type extending as far as a type can. It reads a little
+  lighter in arguments, `decode(text, type Config)`, but `type` at the start of a statement would
+  have to stay a declaration, so a block or an `if` branch could not end in a type value:
+  `{ type Config }` would declare a type instead. A pipe after it would need parentheses too. The
+  parenthesized form decides by the next token, wherever it appears.
+- **A prelude function, `typeof(T)`.** The call would have to parse a type as its argument, which no
+  other call does, and the name suggests the type of a value. A keyword form makes the exception
+  visible.
 - **Explicit type arguments at call sites**, `Json.decode[Config](text)`. Section 4 forbids them,
   `[` after a name already means indexing, and under erasure the argument would still have to be
   passed as a value. That would be this proposal with a second syntax.
@@ -578,39 +591,35 @@ handles `Time.Instant` and other opaque types through a table of codecs keyed by
   type twice, and Ant cannot infer one from the other the way TypeScript's `z.infer` does. Keeping
   the declaration's own body gives the schema at no cost.
 - **Making `Type[T]` assignable to `Type.Erased`.** This would remove the `Type.erase` calls, at the
-  cost of one more assignability rule in section 4. It is open question 2.
+  cost of one more assignability rule in section 4. It is open question 1.
 
 ## Open questions
 
-1. **The spelling.** `type T` reuses a keyword and is decided by position. The alternatives are a
-   prelude form such as `typeof(T)`, which would have to parse a type inside a call, or a sigil.
-   `type` reads well in arguments (`decode(text, type Config)`), and its only quirk is that a pipe
-   after it needs parentheses.
-2. **Implicit erasure.** Should `Type[T]` be assignable to `Type.Erased`, as `never` is to
+1. **Implicit erasure.** Should `Type[T]` be assignable to `Type.Erased`, as `never` is to
    everything? It is sound, since an erased type exposes nothing typed, and it would make
-   `Type.shape(type Server)` read directly. Against it: it is a special case in a list of rules that
-   has none.
-3. **A deep `Dynamic.of` check under `ant run`.** It would catch a mistyped unchecked program at the
+   `Type.shape(type(Server))` read directly. Against it: it is a special case in a list of rules
+   that has none.
+2. **A deep `Dynamic.of` check under `ant run`.** It would catch a mistyped unchecked program at the
    box rather than at a later field read. It costs time proportional to the value's size in checked
    programs too, unless it is limited to unchecked runs, and nothing else in the runtime works that
    way.
-4. **Per-type hooks.** The functions declared on a type are fields of its tag (section 6), so
+3. **Per-type hooks.** The functions declared on a type are fields of its tag (section 6), so
    reflection could offer `Type.function(t, "fromJson")` for Go-style `MarshalJSON` hooks by naming
    convention. This draft leaves hooks to codec tables keyed by type value, which are explicit and
    need no convention. Calling a function found by name would also need `Dynamic.call`.
-5. **Field metadata.** Renames such as `user_name` for `userName` have no place to live. Options are
+4. **Field metadata.** Renames such as `user_name` for `userName` have no place to live. Options are
    naming policies in each format (enough for most files), a field annotation syntax (new grammar),
-   or a function on the type that returns a rename table (hook-based, see 4).
-6. **Exposing defaults.** `Type.Field` says whether a field has a default but not what it is. An
+   or a function on the type that returns a rename table (hook-based, see 3).
+5. **Exposing defaults.** `Type.Field` says whether a field has a default but not what it is. An
    encoder that leaves out fields equal to their default (`omitempty` in spirit) would need
    `Type.default(t, name): Dynamic`, which evaluates the default afresh, as a literal would.
-7. **Untyped inspection.** Debuggers, `assert`'s value rendering, and generic printers walk values
+6. **Untyped inspection.** Debuggers, `assert`'s value rendering, and generic printers walk values
    without a type. Today that is internal to the runtime. A read-only `Dynamic.inspect[T](v: T)`
    whose children could never be unboxed into containers would serve them. It is left out until a
    library needs it.
-8. **Frozen values.** If `frozen.md` is accepted, `Type.shape` needs a `Frozen` member or a flag,
+7. **Frozen values.** If `frozen.md` is accepted, `Type.shape` needs a `Frozen` member or a flag,
    and builders need a frozen variant or a rule that `freeze` applies afterwards.
-9. **The names.** `Dynamic` follows Haskell and Gleam, and `Reflect.Value` would follow Go.
+8. **The names.** `Dynamic` follows Haskell and Gleam, and `Reflect.Value` would follow Go.
    `Type.Erased` could be `Type.Any`, but that name suggests the top type that Ant does not have.
    Both names become prelude names that no program may shadow (section 10), so an existing
    `type Type` in user code would have to be renamed.

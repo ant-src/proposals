@@ -4,7 +4,7 @@
 
 ## Summary
 
-A follow-up to `reflection.md`, which adds the mechanism: `type T` as a value of type `Type[T]`,
+A follow-up to `reflection.md`, which adds the mechanism: `type(T)` as a value of type `Type[T]`,
 `Type.shape` to take a type apart, and `Dynamic` boxes with readers and builders that keep every
 value sound. That proposal deliberately has no policy, so every format would write its own walk over
 types: union choice, missing and unknown fields, defaults, error paths. This proposal is the shared
@@ -23,7 +23,7 @@ layer on top, so that a format only converts its own syntax:
 type Server = { host: string, port: int = 8080, tags: Array[string] = [] }
 type Config = { name: string, servers: Array[Server] }
 
-var config = try Json.decode(text, type Config)
+var config = try Json.decode(text, type(Config))
 ```
 
 A format that agrees with this policy is a converter between its syntax and `Type.Data`: YAML, TOML,
@@ -82,7 +82,7 @@ replies. With this proposal they become small reply types and one call each:
 type Block = { type: string, text: string = "" }
 type AnthropicReply = { stopReason: string | null = null, content: Array[Block] }
 
-var reply = try Json.decode(r.body, type AnthropicReply, key: Type.snakeCase)
+var reply = try Json.decode(r.body, type(AnthropicReply), key: Type.snakeCase)
 var text = reply.content | Array.filter({ x.type == "text" }) | Array.map({ x.text }) | String.concat()
 ```
 
@@ -197,7 +197,7 @@ shape is `Type.Func` or `Type.Opaque` (other than `Bytes` and the time types), `
 type, or a union that breaks the rules above. `Type.build` checks the whole type, with these
 options, before it reads the data, and panics with the path to the part, such as
 `Type.build: $.onSave: a function cannot be built`. The checker reports the same thing as a compile
-error wherever the type is known statically, so `Json.decode(text, type Handler)` fails `ant check`
+error wherever the type is known statically, so `Json.decode(text, type(Handler))` fails `ant check`
 when `Handler` holds a function.
 
 ### 3. Taking apart: `Type.data`
@@ -261,7 +261,7 @@ func Port.fromData(d: Type.Data): Result[Port, Error] {
     if n < 0 || n > 65535 { return Result.err(Error{ message: "port ${n} is out of range" }) }
     return Result.ok(Port(uint16(n)))
   }
-  Result.ok(try Type.build(type uint16, d) | Port)
+  Result.ok(try Type.build(type(uint16), d) | Port)
 }
 
 func Port.toData(p: Port): Type.Data { int64(p) }
@@ -382,7 +382,7 @@ Type.annotation[A](record: Type.Erased, field: string, a: Type[A]): A | null
 ```
 
 ```ant
-var desc = Type.annotation(t, "keyFeatures", type Description)   // Description | null
+var desc = Type.annotation(t, "keyFeatures", type(Description))   // Description | null
 ```
 
 The rules this would need:
@@ -515,9 +515,9 @@ removed.
 
 1. **Hooks by name, by registration, or by interface.** Names are discovered for free, and the
    signature check stops an accidental match from compiling. A registration call, such as
-   `Type.hooks(type Port, fromData: …)`, is explicit but needs a place to run. `interfaces.md` lists
-   these hooks as candidate prelude interfaces with checked signatures; whichever it decides for
-   accidental satisfaction should hold here too.
+   `Type.hooks(type(Port), fromData: …)`, is explicit but needs a place to run. `interfaces.md`
+   lists these hooks as candidate prelude interfaces with checked signatures; whichever it decides
+   for accidental satisfaction should hold here too.
 2. **Tag values.** This draft matches the tag entry to the member's declared name after the `key`
    policy. A program whose discriminator values are not derived from its type names, such as `"c"`
    for `Circle`, needs a hook on the record that holds the union. Is a map from values to members,
