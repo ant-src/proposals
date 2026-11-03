@@ -347,8 +347,8 @@ The same pattern gives environment variables (`Type.shape` for the field names, 
 Not part of the proposal yet; written down to decide later. The `key` option renames every field of
 a call by one policy, which is too blunt: a program that talks to an API wants `maxTokens` in Ant
 and `max_tokens` on the wire, and the name belongs next to the field, not at every call. Field
-annotations would put it there. They would also answer `reflection.md`'s open question 3, Field
-metadata, so the syntax and its reflection belong there, and the annotations this layer honors
+annotations would put it there. `reflection.md` leaves field metadata to a later annotations
+proposal, so the syntax and its reflection belong there, and the annotations this layer honors
 belong here.
 
 ### Typed annotations

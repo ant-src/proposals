@@ -566,7 +566,8 @@ out default values tests each record field with `Type.default`, as above, before
 - **No making types at run time.** Unlike Zig's `@Type`, a program cannot create a record type that
   no declaration wrote.
 - **No field metadata.** There are no struct tags or attributes for renaming fields. A format offers
-  naming policies as options, and per-field renames wait for open question 3.
+  naming policies as options. Per-field renames and other field metadata wait for a later proposal
+  on annotations, which will add the syntax and its reflection together.
 - **No format policy.** Unions, missing and unknown fields, key case, numbers, and the encodings of
   `Bytes` and time belong to each format's proposal.
 
@@ -583,7 +584,7 @@ out default values tests each record field with `Type.default`, as above, before
   the type arguments of a generic record. It needs a second, read-only box type that can never be
   unboxed into a container type, by the argument above. And encoding would no longer walk the same
   type as decoding, so round trips would not be guaranteed. `Json.stringify` already covers untyped
-  rendering. Open question 4 keeps the door open for debuggers.
+  rendering. Open question 3 keeps the door open for debuggers.
 - **Runtime-driven visitors, as in serde's `Deserializer`.** The runtime walks the type and calls a
   record of format callbacks, so no `Dynamic` is needed. But the walk order, the choice of union
   member, and the handling of missing fields are then fixed in the runtime, and every format that
@@ -629,16 +630,13 @@ out default values tests each record field with `Type.default`, as above, before
    reflection could offer `Type.function(t, "fromJson")` for Go-style `MarshalJSON` hooks by naming
    convention. This draft leaves hooks to codec tables keyed by type value, which are explicit and
    need no convention. Calling a function found by name would also need `Dynamic.call`.
-3. **Field metadata.** Renames such as `user_name` for `userName` have no place to live. Options are
-   naming policies in each format (enough for most files), a field annotation syntax (new grammar),
-   or a function on the type that returns a rename table (hook-based, see 2).
-4. **Untyped inspection.** Debuggers, `assert`'s value rendering, and generic printers walk values
+3. **Untyped inspection.** Debuggers, `assert`'s value rendering, and generic printers walk values
    without a type. Today that is internal to the runtime. A read-only `Dynamic.inspect[T](v: T)`
    whose children could never be unboxed into containers would serve them. It is left out until a
    library needs it.
-5. **Frozen values.** If `frozen.md` is accepted, `Type.shape` needs a `Frozen` member or a flag,
+4. **Frozen values.** If `frozen.md` is accepted, `Type.shape` needs a `Frozen` member or a flag,
    and builders need a frozen variant or a rule that `freeze` applies afterwards.
-6. **The names.** `Dynamic` follows Haskell and Gleam, and `Reflect.Value` would follow Go.
+5. **The names.** `Dynamic` follows Haskell and Gleam, and `Reflect.Value` would follow Go.
    `Type.Erased` could be `Type.Any`, but that name suggests the top type that Ant does not have.
    Both names become prelude names that no program may shadow (section 10), so an existing
    `type Type` in user code would have to be renamed.
