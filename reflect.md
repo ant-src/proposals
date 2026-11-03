@@ -307,7 +307,7 @@ string.
 
 **`key`** maps a field name to the key the data uses, so `key: Type.snakeCase` reads `userId` from
 `user_id`. The library provides `Type.snakeCase` and `Type.kebabCase`. One policy covers the whole
-call; renaming one field is a hook's job.
+call; renaming one field is a hook's job. Field annotations, below, may replace this option.
 
 **Errors** name the path from the root: `$.servers[2].port: expected int, got 8.5`,
 `$.servers[0]: missing field host`, `$.shape: kind "hexagon" names no member of Circle | Rect`. The
@@ -526,8 +526,9 @@ its other functions; the debugger shows a type value as `String.from` renders it
 - **No top type.** `Type.Data` is a closed union, as `Json.Value` is.
 - **No run-time checking of ordinary code.** Annotations on variables, parameters and results are
   still discarded.
-- **No per-field attributes.** There is no syntax for `json:"user_id"` or `Field(min=1)`; the `key`
-  policy, `tag` and the hooks cover the same ground.
+- **No per-field attributes in this draft.** There is no syntax for `json:"user_id"` or
+  `Field(min=1)`; the `key` policy, `tag` and the hooks cover the same ground. Field annotations
+  below are a candidate to decide separately.
 - **No reified type parameters.** A generic function that needs its type takes it as a parameter.
 
 ## Alternatives considered
@@ -581,6 +582,89 @@ its other functions; the debugger shows a type value as `String.from` renders it
   and YAML dates.
 - **A shared, frozen `Type.info` graph**, if `frozen.md` is accepted.
 
+## Under consideration: field annotations
+
+Not part of the proposal yet; written down to decide later. The `key` option renames every field of
+a call by one policy, which is too blunt: a program that talks to an API wants `maxTokens` in Ant
+and `max_tokens` on the wire, and the name belongs next to the field, not at every call. Field
+annotations would put it there.
+
+### Typed annotations
+
+An annotation is a value of a declared type, a named primitive or a record, written before a field
+with `@` and the type's constructor call or literal:
+
+```ant
+type Language = {
+  name: string,
+  tagline: string,
+  @Type.Key("key_features") keyFeatures: Array[string],
+  @Type.Key("code_example") codeExample: string,
+  @Type.Tag("kind") shape: Shape,
+}
+```
+
+The annotation types are ordinary declarations. The prelude would declare the ones `Type.build` and
+`Type.data` honor, and any library declares its own:
+
+```ant
+type Type.Key = string            // the key the field reads and writes, in every format
+type Type.Tag = string            // the entry that names the member of a union of records
+type Description = string         // a JSON Schema library's own annotation
+```
+
+A library reads an annotation back by its type, which keeps the result typed without a top type, as
+`Type.build` does:
+
+```
+type Type.Field = { name: string, info: Type.Info, hasDefault: bool, annotations: Type.Annotations }   // Type.Annotations is opaque
+
+Type.annotation[A](field: Type.Field, a: Type[A]): A | null
+```
+
+```ant
+var desc = Type.annotation(field, type Description)   // Description | null
+```
+
+The rules this would need:
+
+- **Checked like any expression.** An unknown annotation type is a compile error, and so are
+  arguments of the wrong type and two annotations of one type on one field. The checker catches
+  `@Type.Kee(…)`, which a string tag never would.
+- **Constant.** An annotation is a literal, a constructor call or a record literal of literals, and
+  names no variable, as a field default may name no variable of its block. The interpreter evaluates
+  it once, when the type is first resolved.
+- **On fields only.** An annotation on a `type` declaration would bring back the problem of hooks on
+  aliases: `Shape` and `Circle | Rect` are one type, and an annotation on `Shape` would make them
+  behave differently. A field annotation belongs to the field, whatever its type.
+- **Grammar.** `@` is a new token, and it only starts an annotation, before a field name in a record
+  type, so the grammar still needs one token of lookahead.
+
+### What it would change in this proposal
+
+- `@Type.Key` replaces the `key` option, and `Type.snakeCase` and `Type.kebabCase` go, so that a
+  renamed field has one obvious spelling.
+- `@Type.Tag` on a field replaces the `tag` option. A root value that is itself a union of records
+  then has no field to carry the tag; it is either wrapped in a record or keeps a call option for
+  the root alone.
+- `Type.Field` gains `annotations`, and `Type.annotation` joins the `Type` namespace.
+- Later candidates: `@Type.Skip` for a field that is never read or written, and descriptions for
+  schemas and `--help`, unless field doc comments come first.
+
+### Alternatives
+
+- **Go struct tags**, `` keyFeatures: Array[string] `json:"key_features"` ``. A string that each
+  library parses at run time, so a misspelt key or option fails silently, and each format has its
+  own tag key, so one rename is written once per format.
+- **Free-form annotations**, `@json("key_features")`, with `json` a bare word. Shorter, but as
+  unchecked as a tag: `@jsno(…)` compiles, two libraries can claim one word, and the arguments have
+  no type.
+- **Per-format keys**, `@Json.Key` and `@Yaml.Key`, as Go has. Only for formats that need different
+  names for one field, which is rare; a format library could later pass its own annotation type to
+  `Type.build` to override `@Type.Key`.
+- **Field names as the wire names**, `max_tokens: int`. It works today and needs nothing, but the
+  wire's spelling leaks into every use in Ant.
+
 ## Open questions
 
 1. **Hooks by name or by registration.** Names are discovered for free, and the signature check
@@ -591,3 +675,5 @@ its other functions; the debugger shows a type value as `String.from` renders it
    policy. A program whose discriminator values are not derived from its type names, such as `"c"`
    for `Circle`, needs a hook on the record that holds the union. Is a map from values to members,
    `tags: Map{ "c": type Circle, … }`, worth adding to `Type.build`?
+3. **Field annotations.** Adopt the typed `@` annotations above in place of `key` and `tag`, keep
+   the call options, or both?
