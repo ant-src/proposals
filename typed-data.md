@@ -284,7 +284,7 @@ Later).
 ```
 Json.decode[T](text: string, t: Type[T], key: func(string): string | null = null,
                tag: string | null = null): Result[T, Error]                       // Type.build(t, Json.toData(try Json.parse(text)), …)
-Json.encode[T](value: T, t: Type[T], indent: string = "", key: func(string): string | null = null,
+Json.encode[T](t: Type[T], value: T, indent: string = "", key: func(string): string | null = null,
                tag: string | null = null): string                                 // Json.stringify(Json.fromData(Type.data(t, value, …)), indent)
 Json.toData(v: Json.Value): Type.Data                                             // a copy
 Json.fromData(d: Type.Data): Json.Value                                           // integers become float64; panics on Bytes

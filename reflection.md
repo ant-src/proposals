@@ -12,7 +12,7 @@ Add one expression form and two prelude types.
   and whether they have a default, an array's element type, a union's members, a named primitive's
   base.
 - `Dynamic` is a value together with a type it belongs to, the one way to hold a value whose type is
-  known only at run time. `Dynamic.of(v, type(T))` boxes, `Dynamic.to(d, type(T))` unboxes, a
+  known only at run time. `Dynamic.of(type(T), v)` boxes, `Dynamic.to(d, type(T))` unboxes, a
   handful of readers take a dynamic value apart along its type, and a handful of builders put new
   values together from dynamic parts, checking each part's type against its slot.
 
@@ -141,7 +141,11 @@ a == type(int64)                          // true: int is an alias of int64
 
 - **Static type.** `type(T)` has type `Type[T]`. `Type[T]` is invariant like every generic type, and
   `T` is solved from the argument as usual, so `func decode[T](text: string, t: Type[T])` called as
-  `decode(text, type(Config))` returns a `Config`.
+  `decode(text, type(Config))` returns a `Config`. A call solves type parameters from its arguments
+  left to right (section 4, Inference), so a function that takes both a `Type[T]` and a value of
+  type `T` takes the type first. Then the token fixes `T` and the value is checked against it:
+  `Dynamic.of(type(int | null), 42)` and `Dynamic.of(type(Array[int]), [])` both check, where with
+  the value first `42` would fix `T` as `int` and `[]` would have no element type.
 - **Closed types only.** `T` may not mention a type parameter of an enclosing function or type
   (including a default in a generic record), since the runtime has nothing bound to that name. This
   is a compile error that says to take a `Type[T]` parameter instead. A generic type needs its
@@ -191,7 +195,7 @@ no body, stays opaque.
 
 Annotations on variables, parameters, and results are still discarded, so a function value cannot
 report its signature. A function is reflected only at a type the program writes:
-`Dynamic.of(f, type(func(int): string))`.
+`Dynamic.of(type(func(int): string), f)`.
 
 ### Type shapes
 
@@ -265,7 +269,7 @@ type Dynamic                                     // opaque: a value with a type 
 type Dynamic.Scalar = null | void | bool | int8 | int16 | int32 | int64
   | uint8 | uint16 | uint32 | uint64 | float32 | float64 | string
 
-Dynamic.of[T](value: T, t: Type[T]): Dynamic                   // the box; t's union resolved to value's member
+Dynamic.of[T](t: Type[T], value: T): Dynamic                   // the box; t's union resolved to value's member
 Dynamic.to[T](d: Dynamic, t: Type[T]): T                       // the value; panics unless d's type is assignable to T
 Dynamic.type(d: Dynamic): Type.Erased                          // never a union or an alias
 
@@ -288,7 +292,7 @@ Dynamic.makeTagged(t: Type.Erased, payload: Dynamic): Dynamic
 **The invariant.** In a checked program, the value in a `Dynamic` belongs to the `Dynamic`'s type.
 Every function above keeps that invariant:
 
-- `Dynamic.of(v, t)` gets it from the checker, which has already checked that `v` is a `T`.
+- `Dynamic.of(t, v)` gets it from the checker, which has already checked that `v` is a `T`.
 - A reader returns a child at the type the parent's type gives that child: the element type, the key
   and value types, the field's substituted type, or the base. When that type is a union, the reader
   resolves it to the member the child's value belongs to. The union rules guarantee there is exactly
@@ -381,7 +385,7 @@ func decodeAt(t: Type.Erased, v: Json.Value, path: string): Result[Dynamic, Erro
   if t == BytesType {
     if !(v is string) { return fail(path, "want a base64 string") }
     var b = try (Encoding.fromBase64(v) | Result.wrapErr(path))
-    return Result.ok(Dynamic.of(b, type(Bytes)))
+    return Result.ok(Dynamic.of(type(Bytes), b))
   }
   var s = Type.shape(t)
   if s is Type.Union {
@@ -391,11 +395,11 @@ func decodeAt(t: Type.Erased, v: Json.Value, path: string): Result[Dynamic, Erro
     }
     fail(path, "want ${t}")
   } else if s is Type.Null {
-    if v == null { Result.ok(Dynamic.of(null, type(null))) } else { fail(path, "want null") }
+    if v == null { Result.ok(Dynamic.of(type(null), null)) } else { fail(path, "want null") }
   } else if s is Type.Bool {
-    if v is bool { Result.ok(Dynamic.of(v, type(bool))) } else { fail(path, "want true or false") }
+    if v is bool { Result.ok(Dynamic.of(type(bool), v)) } else { fail(path, "want true or false") }
   } else if s is Type.String {
-    if v is string { Result.ok(Dynamic.of(v, type(string))) } else { fail(path, "want a string") }
+    if v is string { Result.ok(Dynamic.of(type(string), v)) } else { fail(path, "want a string") }
   } else if s is Type.Int || s is Type.Float {
     var n = if v is float64 { Dynamic.makeNumber(t, v) } else { null }
     if n == null { fail(path, "want ${t}") } else { Result.ok(n) }
@@ -425,8 +429,8 @@ func decodeAt(t: Type.Erased, v: Json.Value, path: string): Result[Dynamic, Erro
   }
 }
 
-export func encode[T](value: T, t: Type[T]): string {
-  encodeAt(Dynamic.of(value, t))
+export func encode[T](t: Type[T], value: T): string {
+  encodeAt(Dynamic.of(t, value))
 }
 
 func encodeAt(d: Dynamic): string {
@@ -460,7 +464,7 @@ type Config = { servers: Array[Server], debug: bool = false }
 var text = try File.read("app.json")
 var config = try decode(text, type(Config))      // a Config
 println(config.servers[0].port)                  // 8080 when the file leaves it out
-println(encode(config, type(Config)))
+println(encode(type(Config), config))
 ```
 
 Some notes on the sketch. Maps and sets decode as arrays and records do and are left out for length.
@@ -469,7 +473,7 @@ A map key decodes through `decodeAt` too, since a JSON key is a `string` and `st
 `$.servers[2].port: want int`. A real encoder rejects a map key whose text is not a JSON string, and
 handles `Time.Instant` and other opaque types through a table of codecs keyed by type value
 (`Map[Type.Erased, Codec]`), which works because type values are `==` and hash. A codec decodes with
-`Time.parseInstant` and boxes with `Dynamic.of(instant, type(Time.Instant))`.
+`Time.parseInstant` and boxes with `Dynamic.of(type(Time.Instant), instant)`.
 
 ## Spec changes
 
@@ -559,7 +563,7 @@ handles `Time.Instant` and other opaque types through a table of codecs keyed by
   they hold an empty array. Checking contents is sound only for immutable values, and it costs time
   proportional to their size. Storing the type is sound and costs one comparison.
 - **Untyped inspection for encoding, as in Go.** `Reflect.view(v)` with no type would let
-  `encode(config)` drop its second argument. It cannot report the element type of an empty array or
+  `encode(config)` drop the type argument. It cannot report the element type of an empty array or
   the type arguments of a generic record. It needs a second, read-only box type that can never be
   unboxed into a container type, by the argument above. And encoding would no longer walk the same
   type as decoding, so round trips would not be guaranteed. `Json.stringify` already covers untyped
