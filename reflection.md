@@ -354,7 +354,8 @@ has more. `scalar` gives a leaf in its own kind, so an encoder can render any nu
 either. It checks that the value has the kind and tag that the type's discriminator names, which it
 needs anyway to resolve a union, and it trusts the rest as it trusts `var xs: Array[int]`. Builders,
 readers, and `Dynamic.to` check types fully, since those checks compare type values and cost nothing
-per element.
+per element. So a mistyped unchecked program fails where it uses a wrong element, not at the box, as
+it does with a wrong annotation. `ant check` is what rules that out.
 
 **Values of the new kinds.** A `Dynamic` is `==` to another when the types are equal and the values
 are `==`, and it renders as `Dynamic(42: int)`. Type values and dynamic values have no `is`
@@ -584,7 +585,7 @@ out default values tests each record field with `Type.default`, as above, before
   the type arguments of a generic record. It needs a second, read-only box type that can never be
   unboxed into a container type, by the argument above. And encoding would no longer walk the same
   type as decoding, so round trips would not be guaranteed. `Json.stringify` already covers untyped
-  rendering. Open question 3 keeps the door open for debuggers.
+  rendering. Open question 2 keeps the door open for debuggers.
 - **Runtime-driven visitors, as in serde's `Deserializer`.** The runtime walks the type and calls a
   record of format callbacks, so no `Dynamic` is needed. But the walk order, the choice of union
   member, and the handling of missing fields are then fixed in the runtime, and every format that
@@ -605,6 +606,14 @@ out default values tests each record field with `Type.default`, as above, before
 - **Explicit type arguments at call sites**, `Json.decode[Config](text)`. Section 4 forbids them,
   `[` after a name already means indexing, and under erasure the argument would still have to be
   passed as a value. That would be this proposal with a second syntax.
+- **A deep `Dynamic.of` check under `ant run`.** Walking the whole value at the box would report a
+  mistyped unchecked program there rather than at a later use. It costs time proportional to the
+  value's size on every call, and since `ant run` never knows whether `ant check` passed, that cost
+  falls on checked programs too. It would still not make unchecked programs sound: an empty
+  `Array[string]` passes as `Array[int]`, and a value changed through another reference after boxing
+  is never seen again. Nothing else in the runtime checks a value against a written type, and the
+  implementation stays simpler without it. A debugging mode that checks annotations deeply
+  everywhere could come later as its own proposal.
 - **Code generation** (`ant gen`, derive). It is fast and needs no runtime support, but it adds a
   build step that Ant does not have, generates code per type, and has to run again whenever a
   declaration changes. It could still come later as an optimization behind the same API.
@@ -622,21 +631,17 @@ out default values tests each record field with `Type.default`, as above, before
 
 ## Open questions
 
-1. **A deep `Dynamic.of` check under `ant run`.** It would catch a mistyped unchecked program at the
-   box rather than at a later field read. It costs time proportional to the value's size in checked
-   programs too, unless it is limited to unchecked runs, and nothing else in the runtime works that
-   way.
-2. **Per-type hooks.** The functions declared on a type are fields of its tag (section 6), so
+1. **Per-type hooks.** The functions declared on a type are fields of its tag (section 6), so
    reflection could offer `Type.function(t, "fromJson")` for Go-style `MarshalJSON` hooks by naming
    convention. This draft leaves hooks to codec tables keyed by type value, which are explicit and
    need no convention. Calling a function found by name would also need `Dynamic.call`.
-3. **Untyped inspection.** Debuggers, `assert`'s value rendering, and generic printers walk values
+2. **Untyped inspection.** Debuggers, `assert`'s value rendering, and generic printers walk values
    without a type. Today that is internal to the runtime. A read-only `Dynamic.inspect[T](v: T)`
    whose children could never be unboxed into containers would serve them. It is left out until a
    library needs it.
-4. **Frozen values.** If `frozen.md` is accepted, `Type.shape` needs a `Frozen` member or a flag,
+3. **Frozen values.** If `frozen.md` is accepted, `Type.shape` needs a `Frozen` member or a flag,
    and builders need a frozen variant or a rule that `freeze` applies afterwards.
-5. **The names.** `Dynamic` follows Haskell and Gleam, and `Reflect.Value` would follow Go.
+4. **The names.** `Dynamic` follows Haskell and Gleam, and `Reflect.Value` would follow Go.
    `Type.Erased` could be `Type.Any`, but that name suggests the top type that Ant does not have.
    Both names become prelude names that no program may shadow (section 10), so an existing
    `type Type` in user code would have to be renamed.

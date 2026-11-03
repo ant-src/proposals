@@ -453,7 +453,7 @@ removed.
 - **Reference.** Write `Type.build` and `Type.data` first as Ant code over `reflection.md`'s
   `Dynamic`, extending its JSON sketch to `Type.Data`. That pins the semantics down in terms of the
   lower layer and proves that layer sufficient. Calling hooks from Ant needs `Dynamic.call` or a
-  codec table (`reflection.md`, open question 2); the reference uses a table built from the tags.
+  codec table (`reflection.md`, open question 1); the reference uses a table built from the tags.
 - **Native.** Then implement both in Go over the same descriptors, since every format on this path
   goes through them. `reflection.md` expects the Ant walk to be several times slower than
   hand-written decoders; native code removes the box per node. Run the reference and the native
