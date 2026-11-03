@@ -110,7 +110,7 @@ Three lessons shape the proposal:
 | One obvious way                    | Good   | One spelling for a type as a value, one box, and one structural view. The cost is two type-value types: `Type[T]` for the typed ends and `Type.Erased` for recursion                         |
 | Minimal syntax                     | Good   | One expression form. `type` is already a keyword, and the next token decides the form: a name declares, `(` denotes                                                                          |
 | Library close to Go                | Good   | `Dynamic` corresponds to `reflect.Value`, and the builders correspond to `reflect.New`, `MakeSlice`, and `MakeMap`. Ant has no `TypeOf(x)`, no struct tags, and no settable values           |
-| Interpreter stays simple           | Fair   | It needs a type-value representation, lazy resolution of declaration bodies, and assignability on closed types. That last one is a small copy of a checker rule, which tests keep in step    |
+| Interpreter stays simple           | Good   | Type values are the checker's own `types.Type`, so equality, unions, substitution, and assignability are shared code. New are a small resolver over kept bodies and a hash                   |
 | A checked program panics on values | Good   | Builders and unboxing panic only on contract violations by the calling library, which can always test first with `Type.shape` and `Type.assignable`                                          |
 | JavaScript backend                 | Good   | Type values are plain immutable objects. Nothing depends on the host's reflection                                                                                                            |
 
@@ -190,9 +190,10 @@ had already parsed. A local type's body names only types of its block (section 4
 declarations), whose tags are the same on every run, so resolving the body once is correct for every
 run.
 
-The prelude's declarations come from `prelude.d.ant` in the same way, so `type(Result[int, Error])`,
-`type(Json.Value)`, and `type(Panic)` have bodies. An opaque type, written `type Regex.Pattern` with
-no body, stays opaque.
+Prelude types have bodies too, so `type(Result[int, Error])`, `type(Json.Value)`, and `type(Panic)`
+can be taken apart. The bodies are the declarations of `prelude.d.ant`, which the runtime reads when
+reflection first reaches a prelude type. An opaque type, written `type Regex.Pattern` with no body,
+stays opaque.
 
 Annotations on variables, parameters, and results are still discarded, so a function value cannot
 report its signature. A function is reflected only at a type the program writes:
@@ -507,6 +508,8 @@ out default values tests each record field with `Type.default`, as above, before
 - **Section 4, new subsection "Types as values".** Type expressions, closedness, equality, laziness,
   and `Type.Erased`.
 - **Section 5.** `type ( Type )` in the expression grammar, as a primary expression.
+- **Section 10.** `Type` and `Dynamic` join the prelude names that no program may shadow, so a
+  program that declares its own `Type` renames it.
 - **Section 11, new subsection "Type and Dynamic".** The listing above, the invariant, and the
   builder and reader rules.
 - **Section 12.** In Values, the kinds type and dynamic, and a tag's kept body. In Expressions, the
@@ -520,36 +523,55 @@ out default values tests each record field with `Type.default`, as above, before
 - **Parser and AST** (`ant/parser`, `ant/ast`). A `TypeExpr` node in expression position holds the
   type syntax the parser already produces for annotations. `ant fmt` prints it as it prints an
   annotation, and the highlighter and LSP treat the type part as a type.
-- **Values** (`ant/value/value.go`). `Tag` gains `Params []string` and the kept body, stored as an
-  opaque `any` beside `Defaults` together with its scope, plus a resolved cache filled once under a
-  `sync.Once`. Two new kinds: `TypeValue`, an immutable descriptor (primitive kind, tag with
-  arguments, array, map, set, anonymous record, union, function, opaque), and `Dynamic` (a value and
-  a `*TypeValue`). Equality and hashing follow the coinductive rule that maps and records already
-  use.
-- **Interpreter** (`ant/internal/interp`). Evaluate `TypeExpr` once per node and cache the result.
-  Substitute type arguments when a shape reads a generic body. Builders and `Type.default` reuse
-  `fillDefaults`, so a default runs exactly as it would in a literal.
-- **Assignability on closed types.** The runtime needs section 4's relation on descriptors without
-  inference. It is small (same type, union membership, `never`, anonymous record width, invariant
-  arguments, function variance), but it duplicates `ant/internal/types/assign.go`. A test generates
-  pairs of closed types and checks that the two implementations agree.
+- **Type values are the checker's types.** A type value holds a `types.Type` from
+  `ant/internal/types`, the package the checker already uses for section 4. Equality (`types.Equal`,
+  which already handles recursive types), union normalization (`types.MakeUnion`), alias expansion,
+  substitution of type arguments (`types.Subst`), rendering, and assignability (`types.Assignable`)
+  are the checker's own code, so the runtime and the checker cannot disagree. The runtime only ever
+  builds closed types, so `types.Param` and `types.Invalid` never reach these functions.
+- **Values** (`ant/value`). `value` cannot import `types`, which imports `value`, so `value`
+  declares a small interface for a type value (equal, hash, render), and `ant/internal/lib`
+  implements it over `types.Type`. `Dynamic` is a value with such a type. `Tag` keeps the
+  declaration's `ast.TypeDecl` and the environment it was declared in, as an opaque `any` beside
+  `Defaults`.
+- **Declarations.** Each tag gets one `*types.Decl`, built the first time reflection reaches it and
+  cached. The `Decl` is cached before its fields, alias body, or base are resolved, so a recursive
+  type finds itself, as the checker's `resolveTypeOnce` does. A generic declaration keeps its
+  `types.ParamDecl`s, and a shape substitutes the arguments with `types.Subst`.
+- **Resolver** (`ant/internal/interp`). A runtime resolver turns type syntax into a `types.Type`.
+  The table of built-in names (primitives, `null`, `void`, `never`, `Array`, `Map`, `Set`) moves
+  into `types` and is shared with the checker. The structural walk mirrors the checker's
+  `resolveType`, about forty lines. Any other name is evaluated to a tag or constructor, as `is`
+  evaluates its target, and mapped to that tag's `Decl`. Where the checker would report an error,
+  the resolver panics. `TypeExpr` is resolved once per node and cached. Builders and `Type.default`
+  reuse `fillDefaults`, so a default runs exactly as it would in a literal.
+- **Prelude bodies.** Prelude tags are created in Go (`ant/internal/lib`), and their bodies exist
+  only in `prelude.d.ant`. The first time reflection reaches a prelude tag, the runtime parses the
+  embedded `prelude.d.ant`, which it does not otherwise read, and attaches each declaration to the
+  tag of the same qualified name. A test checks that every Go-created tag has a declaration with the
+  same fields.
+- **Hashing.** A type value hashes its top layer only, after expanding aliases: its kind, its `Decl`
+  and the hashes of its arguments, and a union's members combined in any order. Equal types hash
+  equally, and a recursive alias such as `Json.Value` cannot loop.
 - **Checker** (`ant/internal/check`). Type `TypeExpr` as `Type[T]`, reject free type parameters, and
   declare the `Type` and `Dynamic` namespaces in `ant/internal/prelude/prelude.d.ant` with doc
   comments.
-- **Library** (`ant/internal/lib`). The functions above, in a new `reflect.go`.
-- **JavaScript backend.** The same descriptors as plain frozen objects. Nothing depends on the
-  host's reflection.
+- **Library** (`ant/internal/lib`). The functions above, in a new `reflect.go`, and the type value
+  implementation over `types.Type`.
+- **JavaScript backend.** Type values as plain frozen objects with the same relations. Nothing
+  depends on the host's reflection.
 - **Tests.** Every shape, including recursive records, recursive aliases (`Json.Value`), local
-  types, generic records and named primitives with arguments, and prelude types. Union resolution
-  for each discriminator kind, including the anonymous member and a sync member. Every builder
-  contract panic. Defaults filled by `makeRecord` with fresh evaluation per call, and the same for
-  `Type.default`, including a default that reads a variable, a default of a generic record at two
-  type arguments, a default of a local type, and each of its panics. The soundness cases: an empty
-  `Array[int]` boxed and unboxed as `Array[string]` panics, `Array[Circle]` is refused for an
-  `Array[Shape]` slot, and a `Person` is accepted for a `{ name: string }` slot and read back
-  through it with only `name`. An unchecked run with a wrong `Dynamic.of` panics on kind. The JSON
-  sketch above, run as a round-trip property test over generated values of generated types.
-- **Benchmarks.** Before acceptance, measure the sketch against hand-written decoders on a 1 MB
+  types, generic records and named primitives with arguments, and prelude types, with every
+  Go-created prelude tag matched to its declaration. Union resolution for each discriminator kind,
+  including the anonymous member and a sync member. Every builder contract panic. Defaults filled by
+  `makeRecord` with fresh evaluation per call, and the same for `Type.default`, including a default
+  that reads a variable, a default of a generic record at two type arguments, a default of a local
+  type, and each of its panics. The soundness cases: an empty `Array[int]` boxed and unboxed as
+  `Array[string]` panics, `Array[Circle]` is refused for an `Array[Shape]` slot, and a `Person` is
+  accepted for a `{ name: string }` slot and read back through it with only `name`. An unchecked run
+  with a wrong `Dynamic.of` panics on kind. The JSON sketch above, run as a round-trip property test
+  over generated values of generated types.
+- **Benchmarks.** Before merging, measure the sketch against hand-written decoders on a 1 MB
   configuration and a 10 MB array of records. Expect several times slower: one box per node, plus
   the `Json.Value` tree in between. If the follow-up needs speed, `Json.decode` can be native with
   the same semantics, and this proposal still defines what it means.
@@ -620,6 +642,13 @@ out default values tests each record field with `Type.default`, as above, before
 - **Schemas in a library**, in the style of Zod. Declaring `ConfigSchema` beside `Config` writes the
   type twice, and Ant cannot infer one from the other the way TypeScript's `z.infer` does. Keeping
   the declaration's own body gives the schema at no cost.
+- **A separate runtime type representation.** The runtime could describe types with its own
+  structures and its own copy of section 4's assignability, kept in step with the checker by a test
+  over generated pairs. Reusing `types.Type` removes the second copy, and the one place the two
+  could disagree.
+- **Other names.** `Reflect.Value` for `Dynamic` would follow Go, and `Dynamic` follows Haskell and
+  Gleam and is shorter at every call. `Type.Any` for `Type.Erased` would suggest the top type that
+  Ant does not have.
 - **Making `Type[T]` assignable to `Type.Erased`.** This would remove the `Type.erase` calls, and it
   would be sound, since an erased type exposes nothing typed. But it would be the one implicit
   conversion in section 4's assignability rules, made for one library. `never` is assignable to
@@ -641,7 +670,3 @@ out default values tests each record field with `Type.default`, as above, before
    library needs it.
 3. **Frozen values.** If `frozen.md` is accepted, `Type.shape` needs a `Frozen` member or a flag,
    and builders need a frozen variant or a rule that `freeze` applies afterwards.
-4. **The names.** `Dynamic` follows Haskell and Gleam, and `Reflect.Value` would follow Go.
-   `Type.Erased` could be `Type.Any`, but that name suggests the top type that Ant does not have.
-   Both names become prelude names that no program may shadow (section 10), so an existing
-   `type Type` in user code would have to be renamed.
