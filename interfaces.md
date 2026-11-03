@@ -338,7 +338,7 @@ jobs->push(Job{ priority: 2, name: "build" })
 ## Later
 
 - **Prelude interfaces as hooks.** A `toString` for `String.from`, a `compare` that lets
-  `Array.sort` take user types, and `reflect.md`'s `fromData`/`toData`/`validate`, as interfaces
+  `Array.sort` take user types, and `typed-data.md`'s `fromData`/`toData`/`validate`, as interfaces
   with checked signatures instead of names. Each changes what a built-in function does to a record,
   so each is its own decision.
 - **I/O interfaces** over `File.Handle`, network connections and user types, as in Go. Prelude
@@ -361,6 +361,6 @@ jobs->push(Job{ priority: 2, name: "build" })
    suggest it.
 4. **Nullable receivers.** `x?->f()`, yielding `null` when `x` is `null`, as `?.` does for fields.
 5. **Accidental satisfaction.** A type with a `close` of the right shape satisfies every `Closer`.
-   Go accepts this; `reflect.md` rejected hooks that a function could become by accident. The two
+   Go accepts this; `typed-data.md` rejected hooks that a function could become by accident. The two
    proposals should agree.
 6. **`Self`.** A reserved word, or a type name only inside interface bodies.

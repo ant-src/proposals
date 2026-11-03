@@ -21,7 +21,7 @@ the syntax the parser already built, and it turns that syntax into a type value 
 asks. `ant run` stays free of static work, the checker stays the only place where inference runs,
 and a checked program cannot use reflection to give a value a type it does not have. With these
 pieces typed decoding and encoding for JSON, YAML, or XML are ordinary Ant library code. That code
-is sketched below and left to follow-up proposals.
+is sketched below and left to follow-up proposals, the first of which is `typed-data.md`.
 
 ## Motivation
 
@@ -351,10 +351,10 @@ none of this. It cannot name a private type that the program cannot already reac
 
 ### Sketch: typed JSON on top
 
-This is not part of the proposal. The format design belongs to a follow-up, and policy choices here
-(the first union member that decodes wins, unknown fields are ignored, `Bytes` is base64) are
-placeholders. The sketch shows that the pieces above are enough and that the code passes the checker
-as written.
+This is not part of the proposal. The format design belongs to a follow-up, `typed-data.md`, and
+policy choices here (the first union member that decodes wins, unknown fields are ignored, `Bytes`
+is base64) are placeholders. The sketch shows that the pieces above are enough and that the code
+passes the checker as written.
 
 ```ant
 // typed.ant: JSON into and out of declared types, as library code

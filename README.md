@@ -4,14 +4,14 @@ Design proposals for [Ant](https://github.com/ant-src/spec). A proposal describe
 reaches the specification: the problem, prior art, the proposed API, and the spec sections it
 touches. Nothing here is part of the language until it is accepted and written into the spec.
 
-| Proposal                       | Summary                                                                    | Status |
-| ------------------------------ | -------------------------------------------------------------------------- | ------ |
-| [ui.md](ui.md)                 | A client framework and server components on `Html`                         | Sketch |
-| [frozen.md](frozen.md)         | `freeze` and `Frozen[T]`: deep immutable copies, enforced at run time      | Draft  |
-| [coverage.md](coverage.md)     | Statement and branch coverage for `ant test` and `ant run`, in LCOV        | Draft  |
-| [reflect.md](reflect.md)       | Types as values: `type X`, `Type.info`, `Type.build`; JSON decoding on top | Draft  |
-| [reflection.md](reflection.md) | `type T` values, `Type.shape`, and `Dynamic` boxes that keep their type    | Draft  |
-| [interfaces.md](interfaces.md) | `->` calls a value's own functions; interfaces checked, not run            | Draft  |
+| Proposal                       | Summary                                                                       | Status |
+| ------------------------------ | ----------------------------------------------------------------------------- | ------ |
+| [ui.md](ui.md)                 | A client framework and server components on `Html`                            | Sketch |
+| [frozen.md](frozen.md)         | `freeze` and `Frozen[T]`: deep immutable copies, enforced at run time         | Draft  |
+| [coverage.md](coverage.md)     | Statement and branch coverage for `ant test` and `ant run`, in LCOV           | Draft  |
+| [typed-data.md](typed-data.md) | `Type.Data`, `Type.build`, hooks and `Json.decode`, on top of `reflection.md` | Draft  |
+| [reflection.md](reflection.md) | `type T` values, `Type.shape`, and `Dynamic` boxes that keep their type       | Draft  |
+| [interfaces.md](interfaces.md) | `->` calls a value's own functions; interfaces checked, not run               | Draft  |
 
 ## Process
 
