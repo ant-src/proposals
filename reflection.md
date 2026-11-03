@@ -4,17 +4,18 @@
 
 ## Summary
 
-Add one expression form and two prelude types.
+Add one expression form and one prelude namespace, `Reflect`.
 
 - `type(T)`, written where an expression goes, is the type `T` as a value. Its static type is
-  `Type[T]`. `Json.decode(text, type(Array[Config]))` is how a caller will say what it wants.
-- `Type.shape(t)` takes a type value apart one level at a time: a record's fields with their types
-  and whether they have a default, an array's element type, a union's members, a named primitive's
-  base.
-- `Dynamic` is a value together with a type it belongs to, the one way to hold a value whose type is
-  known only at run time. `Dynamic.of(type(T), v)` boxes, `Dynamic.to(d, type(T))` unboxes, a
-  handful of readers take a dynamic value apart along its type, and a handful of builders put new
-  values together from dynamic parts, checking each part's type against its slot.
+  `Reflect.Type[T]`. `Json.decode(text, type(Array[Config]))` is how a caller will say what it
+  wants.
+- `Reflect.shape(t)` takes a type value apart one level at a time: a record's fields with their
+  types and whether they have a default, an array's element type, a union's members, a named
+  primitive's base.
+- `Reflect.Value` is a value together with a type it belongs to, the one way to hold a value whose
+  type is known only at run time. `Reflect.valueOf(type(T), v)` boxes, `Reflect.to(d, type(T))`
+  unboxes, a handful of readers take a reflected value apart along its type, and a handful of
+  builders put new values together from reflected parts, checking each part's type against its slot.
 
 The interpreter still discards every annotation. What it keeps is a `type` declaration's body, as
 the syntax the parser already built, and it turns that syntax into a type value only when reflection
@@ -57,9 +58,9 @@ interpreter can know by parsing alone.
 | Approach                                     | Examples                                                                                                                                                                                                   | What Ant takes                                                                                                                                                                                        |
 | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Runtime types on every value                 | Go `reflect.TypeOf(x)`, `reflect.ValueOf(x)`; C# `GetType()` with reified generics; Julia `typeof`, `fieldtypes`                                                                                           | The `Value` model: a value paired with its type, plus constructors in the style of `reflect.New`, `MakeSlice`, and `MakeMap`. Not `TypeOf(x)`, because an Ant value does not carry its type arguments |
-| Type tokens under erasure                    | Java `Class<T>`, Gson `TypeToken`, Jackson `TypeReference` (super type tokens); Kotlin `typeOf<T>()` in `reified` functions; Go 1.22 `reflect.TypeFor[T]()`                                                | The core mechanism. An erased language has to be handed the type as a value, and `Type[T]` ties that value to `T` statically, as `Class<T>` does                                                      |
-| Type-indexed dynamic values                  | Haskell `Typeable`, `Data.Dynamic` (`toDyn`, `fromDynamic`); Rust `std::any::Any` with `downcast_ref`                                                                                                      | `Dynamic`. Unboxing compares the type stored in the box instead of inspecting the value, which is what makes it sound under mutation and aliasing                                                     |
-| A structural view of types as a tagged union | Zig `@typeInfo` returning `std.builtin.Type` (`Int{ signedness, bits }`, `Struct{ fields }`, `Optional`, `Union`, ...), used by `std.json` to parse into any type                                          | `Type.shape`, whose members follow Zig's split. Zig does this at compile time, and Ant does it at run time from the kept declarations                                                                 |
+| Type tokens under erasure                    | Java `Class<T>`, Gson `TypeToken`, Jackson `TypeReference` (super type tokens); Kotlin `typeOf<T>()` in `reified` functions; Go 1.22 `reflect.TypeFor[T]()`                                                | The core mechanism. An erased language has to be handed the type as a value, and `Reflect.Type[T]` ties that value to `T` statically, as `Class<T>` does                                              |
+| Type-indexed dynamic values                  | Haskell `Typeable`, `Data.Dynamic` (`toDyn`, `fromDynamic`); Rust `std::any::Any` with `downcast_ref`                                                                                                      | `Reflect.Value`. Unboxing compares the type stored in the box instead of inspecting the value, which is what makes it sound under mutation and aliasing                                               |
+| A structural view of types as a tagged union | Zig `@typeInfo` returning `std.builtin.Type` (`Int{ signedness, bits }`, `Struct{ fields }`, `Optional`, `Union`, ...), used by `std.json` to parse into any type                                          | `Reflect.shape`, whose members follow Zig's split. Zig does this at compile time, and Ant does it at run time from the kept declarations                                                              |
 | Read-only mirrors                            | Swift `Mirror` (children as label and value pairs); JavaScript `Object.keys`                                                                                                                               | Nothing alone. A mirror can feed an encoder but cannot build a value, so it cannot feed a decoder                                                                                                     |
 | Compile-time derivation                      | Rust `serde` derive over a 29-type data model; Kotlin `@Serializable` compiler plugin; Swift synthesized `Codable`; Haskell `aeson` through `GHC.Generics`; OCaml `ppx_deriving`; Dart `json_serializable` | The lesson that one small data model, shared by every format, keeps each format small. Not the mechanism: `ant run` has no compile step to derive in                                                  |
 | Schemas as values                            | TypeScript Zod, Valibot, io-ts (`z.infer<typeof Schema>`); Python pydantic, which reads class annotations                                                                                                  | The diagnosis: erased types need a value that stands for them at the boundary. TypeScript writes the type a second time as a schema. Ant can build the schema from the type's own syntax              |
@@ -101,18 +102,18 @@ Three lessons shape the proposal:
 
 ### Fit with Ant
 
-| Principle or decision              | Fit    | Why                                                                                                                                                                                          |
-| ---------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Types are advisory, erased at run  | Strong | Ordinary evaluation still consults no annotation. Only a `type` expression, and the declaration bodies it reaches, become values, and the parser builds both. Inference stays in the checker |
-| No top type                        | Strong | `Dynamic` is not assignable from anything: `Dynamic.of` takes the type as well as the value, and unboxing names the type it expects. It is Haskell's `Dynamic`, not TypeScript's `any`       |
-| Union members are distinguishable  | Strong | The union rules guarantee that a value's kind or tag names exactly one member. So the readers can always resolve a union to its member, and encoders never see a union                       |
-| Field defaults on the tag          | Strong | Tags already keep defaults, so a builder fills omitted fields exactly as a literal does, and a decoder can tell a missing field from a missing value                                         |
-| One obvious way                    | Good   | One spelling for a type as a value, one box, and one structural view. The cost is two type-value types: `Type[T]` for the typed ends and `Type.Erased` for recursion                         |
-| Minimal syntax                     | Good   | One expression form. `type` is already a keyword, and the next token decides the form: a name declares, `(` denotes                                                                          |
-| Library close to Go                | Good   | `Dynamic` corresponds to `reflect.Value`, and the builders correspond to `reflect.New`, `MakeSlice`, and `MakeMap`. Ant has no `TypeOf(x)`, no struct tags, and no settable values           |
-| Interpreter stays simple           | Good   | Type values are the checker's own `types.Type`, so equality, unions, substitution, and assignability are shared code. New are a small resolver over kept bodies and a hash                   |
-| A checked program panics on values | Good   | Builders and unboxing panic only on contract violations by the calling library, which can always test first with `Type.shape` and `Type.assignable`                                          |
-| JavaScript backend                 | Good   | Type values are plain immutable objects. Nothing depends on the host's reflection                                                                                                            |
+| Principle or decision              | Fit    | Why                                                                                                                                                                                                                           |
+| ---------------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Types are advisory, erased at run  | Strong | Ordinary evaluation still consults no annotation. Only a `type` expression, and the declaration bodies it reaches, become values, and the parser builds both. Inference stays in the checker                                  |
+| No top type                        | Strong | `Reflect.Value` is not assignable from anything: `Reflect.valueOf` takes the type as well as the value, and unboxing names the type it expects. It is Haskell's `Dynamic`, not TypeScript's `any`                             |
+| Union members are distinguishable  | Strong | The union rules guarantee that a value's kind or tag names exactly one member. So the readers can always resolve a union to its member, and encoders never see a union                                                        |
+| Field defaults on the tag          | Strong | Tags already keep defaults, so a builder fills omitted fields exactly as a literal does, and a decoder can tell a missing field from a missing value                                                                          |
+| One obvious way                    | Good   | One spelling for a type as a value, one box, and one structural view. The cost is two type-value types: `Reflect.Type[T]` for the typed ends and `Reflect.ErasedType` for recursion                                           |
+| Minimal syntax                     | Good   | One expression form. `type` is already a keyword, and the next token decides the form: a name declares, `(` denotes                                                                                                           |
+| Library close to Go                | Good   | `Reflect.Type` and `Reflect.Value` correspond to `reflect.Type` and `reflect.Value`, and the builders correspond to `reflect.New`, `MakeSlice`, and `MakeMap`. Ant has no `TypeOf(x)`, no struct tags, and no settable values |
+| Interpreter stays simple           | Good   | Type values are the checker's own `types.Type`, so equality, unions, substitution, and assignability are shared code. New are a small resolver over kept bodies and a hash                                                    |
+| A checked program panics on values | Good   | Builders and unboxing panic only on contract violations by the calling library, which can always test first with `Reflect.shape` and `Reflect.assignable`                                                                     |
+| JavaScript backend                 | Good   | Type values are plain immutable objects. Nothing depends on the host's reflection                                                                                                                                             |
 
 ## The proposal
 
@@ -131,25 +132,27 @@ JavaScript's `typeof x`, it does not ask what a value is (see Non-goals). `type(
 compile error that says so: "`type(...)` takes a type, not a value".
 
 ```ant
-var a = type(int)                         // Type[int]
-var b = type(Array[Config])               // Type[Array[Config]]
-var c = type(int | null)                  // Type[int | null]
+var a = type(int)                         // Reflect.Type[int]
+var b = type(Array[Config])               // Reflect.Type[Array[Config]]
+var c = type(int | null)                  // Reflect.Type[int | null]
 var d = type(Map[string, Array[int]])
 println(b)                                // Array[Config]
 a == type(int64)                          // true: int is an alias of int64
 ```
 
-- **Static type.** `type(T)` has type `Type[T]`. `Type[T]` is invariant like every generic type, and
-  `T` is solved from the argument as usual, so `func decode[T](text: string, t: Type[T])` called as
-  `decode(text, type(Config))` returns a `Config`. A call solves type parameters from its arguments
-  left to right (section 4, Inference), so a function that takes both a `Type[T]` and a value of
-  type `T` takes the type first. Then the token fixes `T` and the value is checked against it:
-  `Dynamic.of(type(int | null), 42)` and `Dynamic.of(type(Array[int]), [])` both check, where with
-  the value first `42` would fix `T` as `int` and `[]` would have no element type.
+- **Static type.** `type(T)` has type `Reflect.Type[T]`. `Reflect.Type[T]` is invariant like every
+  generic type, and `T` is solved from the argument as usual, so
+  `func decode[T](text: string, t: Reflect.Type[T])` called as `decode(text, type(Config))` returns
+  a `Config`. A call solves type parameters from its arguments left to right (section 4, Inference),
+  so a function that takes both a `Reflect.Type[T]` and a value of type `T` takes the type first.
+  Then the token fixes `T` and the value is checked against it:
+  `Reflect.valueOf(type(int | null), 42)` and `Reflect.valueOf(type(Array[int]), [])` both check,
+  where with the value first `42` would fix `T` as `int` and `[]` would have no element type.
 - **Closed types only.** `T` may not mention a type parameter of an enclosing function or type
   (including a default in a generic record), since the runtime has nothing bound to that name. This
-  is a compile error that says to take a `Type[T]` parameter instead. A generic type needs its
-  arguments, as in an annotation, so `type(Box)` is a compile error and `type(Box[int])` is fine.
+  is a compile error that says to take a `Reflect.Type[T]` parameter instead. A generic type needs
+  its arguments, as in an annotation, so `type(Box)` is a compile error and `type(Box[int])` is
+  fine.
 - **A type name alone is still not a value.** Section 4's rule stands: `Config` in expression
   position remains a compile error except as a literal head, an `is` target, a namespace, or a
   constructor. `type(Config)` is the value.
@@ -168,11 +171,11 @@ a == type(int64)                          // true: int is an alias of int64
   codecs. `String.from` renders the type in annotation syntax, with an alias by the name it was
   written with: `Array[Config]`, `int | null`, `Json.Value`.
 
-`Type.Erased` is a type value whose static type is unknown, and `Type.erase(t)` is the conversion
-from `Type[T]`. The conversion is always written: `Type[T]` is not assignable to `Type.Erased` (see
-Alternatives). Format code recurses on erased types, since the element type of an `Array[E]` is not
-known statically one level down. The typed form is needed at the two ends only: the caller's
-`type(T)` and the final `Dynamic.to`.
+`Reflect.ErasedType` is a type value whose static type is unknown, and `Reflect.erase(t)` is the
+conversion from `Reflect.Type[T]`. The conversion is always written: `Reflect.Type[T]` is not
+assignable to `Reflect.ErasedType` (see Alternatives). Format code recurses on erased types, since
+the element type of an `Array[E]` is not known statically one level down. The typed form is needed
+at the two ends only: the caller's `type(T)` and the final `Reflect.to`.
 
 ### What the interpreter keeps
 
@@ -181,7 +184,8 @@ body is discarded". Under this proposal the tag or constructor also keeps the de
 parameter names and its body, as the syntax tree the parser already built, together with the scope
 the declaration was in. The body is resolved to a type value only when reflection first reaches it,
 and the result is cached. A record body gives the field types beside the names and defaults it
-already keeps. An alias body is what `Type.shape` expands to. A named primitive's body is its base.
+already keeps. An alias body is what `Reflect.shape` expands to. A named primitive's body is its
+base.
 
 The resolution is lazy, for the same reasons PEP 649 made Python's annotations lazy. A recursive
 type such as `type Tree = { value: int, children: Array[Tree] }` would otherwise need its own value
@@ -197,62 +201,63 @@ stays opaque.
 
 Annotations on variables, parameters, and results are still discarded, so a function value cannot
 report its signature. A function is reflected only at a type the program writes:
-`Dynamic.of(type(func(int): string), f)`.
+`Reflect.valueOf(type(func(int): string), f)`.
 
 ### Type shapes
 
 ```
-type Type[T]                                     // opaque: the type T as a value, written `type(T)`
-type Type.Erased                                 // opaque: a type value of unknown static type
+type Reflect.Type[T]                                                        // opaque: the type T as a value, written `type(T)`
+type Reflect.ErasedType                                                     // opaque: a type value of unknown static type
 
-Type.erase[T](t: Type[T]): Type.Erased
-Type.shape(t: Type.Erased): Type.Shape            // one level; aliases expanded, unions flattened
-Type.assignable(from: Type.Erased, to: Type.Erased): bool   // section 4's rule, on two closed types
-Type.default(t: Type.Erased, name: string): Dynamic          // a field's default, evaluated afresh
+Reflect.erase[T](t: Reflect.Type[T]): Reflect.ErasedType
+Reflect.shape(t: Reflect.ErasedType): Reflect.Shape                         // one level; aliases expanded, unions flattened
+Reflect.assignable(from: Reflect.ErasedType, to: Reflect.ErasedType): bool  // section 4's rule, on two closed types
+Reflect.default(t: Reflect.ErasedType, name: string): Reflect.Value         // a field's default, evaluated afresh
 
-type Type.Shape = Type.Null | Type.Void | Type.Never | Type.Bool | Type.Int | Type.Float | Type.String
-  | Type.Array | Type.Map | Type.Set | Type.Record | Type.Named | Type.Union | Type.Func | Type.Opaque
+type Reflect.Shape = Reflect.Null | Reflect.Void | Reflect.Never | Reflect.Bool | Reflect.Int
+  | Reflect.Float | Reflect.String | Reflect.Array | Reflect.Map | Reflect.Set | Reflect.Record
+  | Reflect.Named | Reflect.Union | Reflect.Func | Reflect.Opaque
 
-type Type.Null = {}
-type Type.Void = {}
-type Type.Never = {}
-type Type.Bool = {}
-type Type.Int = { bits: int, signed: bool }              // int8 … uint64; int is { bits: 64, signed: true }
-type Type.Float = { bits: int }                          // float32, float64
-type Type.String = {}
-type Type.Array = { element: Type.Erased }
-type Type.Map = { key: Type.Erased, value: Type.Erased }
-type Type.Set = { member: Type.Erased }
-type Type.Record = { name: string | null, args: Array[Type.Erased], fields: Array[Type.Field] }
-type Type.Field = { name: string, type: Type.Erased, hasDefault: bool }
-type Type.Named = { name: string, args: Array[Type.Erased], base: Type.Erased }   // a named primitive type
-type Type.Union = { members: Array[Type.Erased] }
-type Type.Func = { params: Array[Type.Erased], result: Type.Erased }
-type Type.Opaque = { name: string }
+type Reflect.Null = {}
+type Reflect.Void = {}
+type Reflect.Never = {}
+type Reflect.Bool = {}
+type Reflect.Int = { bits: int, signed: bool }              // int8 … uint64; int is { bits: 64, signed: true }
+type Reflect.Float = { bits: int }                          // float32, float64
+type Reflect.String = {}
+type Reflect.Array = { element: Reflect.ErasedType }
+type Reflect.Map = { key: Reflect.ErasedType, value: Reflect.ErasedType }
+type Reflect.Set = { member: Reflect.ErasedType }
+type Reflect.Record = { name: string | null, args: Array[Reflect.ErasedType], fields: Array[Reflect.Field] }
+type Reflect.Field = { name: string, type: Reflect.ErasedType, hasDefault: bool }
+type Reflect.Named = { name: string, args: Array[Reflect.ErasedType], base: Reflect.ErasedType }   // a named primitive type
+type Reflect.Union = { members: Array[Reflect.ErasedType] }
+type Reflect.Func = { params: Array[Reflect.ErasedType], result: Reflect.ErasedType }
+type Reflect.Opaque = { name: string }
 ```
 
 - **Records.** `name` is the declared name, or `null` for an anonymous record type. `args` are the
   type arguments, and `fields` come in declaration order, with each field's type already
   substituted: in `Box[int]`, the field `value` has type `int`. `hasDefault` says whether a literal,
-  and so a builder, may leave the field out, and `Type.default` gives the default itself.
+  and so a builder, may leave the field out, and `Reflect.default` gives the default itself.
 - **Named primitives.** `Id[User]` and `Id[Account]` share a tag (section 4) but are different type
   values, because their `args` differ.
 - **Unions.** Members are flattened and deduplicated, aliases are expanded, and the members come in
-  the order they were written. `T | null` is a union with a `Type.Null` member, and
+  the order they were written. `T | null` is a union with a `Reflect.Null` member, and
   `Result[int, Error]` is a union of the records `Ok[int]` and `Err[Error]`.
 - **Opaque.** Everything whose values reflection does not take apart: `Bytes`, `Html`,
   `Regex.Pattern`, the time types, the sync, random, and resource types, the opaque types of a
-  declaration file, `Type[T]`, `Type.Erased`, and `Dynamic`. `name` renders the type. A format tests
-  for a type it handles by comparing type values, `t == Type.erase(type(Bytes))`, rather than by
-  name.
-- **One level.** Children are `Type.Erased` values, so a recursive type is a finite graph that a
-  program walks as deep as it needs.
+  declaration file, `Reflect.Type[T]`, `Reflect.ErasedType`, and `Reflect.Value`. `name` renders the
+  type. A format tests for a type it handles by comparing type values,
+  `t == Reflect.erase(type(Bytes))`, rather than by name.
+- **One level.** Children are `Reflect.ErasedType` values, so a recursive type is a finite graph
+  that a program walks as deep as it needs.
 
 ```ant
 type Server = { host: string, port: int = 8080, tags: Array[string] = [] }
 
-var s = Type.shape(Type.erase(type(Server)))
-if s is Type.Record {
+var s = Reflect.shape(Reflect.erase(type(Server)))
+if s is Reflect.Record {
   for f in s.fields { println("${f.name}: ${f.type}, default: ${f.hasDefault}") }
 }
 // host: string, default: false
@@ -260,69 +265,69 @@ if s is Type.Record {
 // tags: Array[string], default: true
 ```
 
-`Type.assignable` is section 4's relation applied to two closed types, so it has no inference, no
+`Reflect.assignable` is section 4's relation applied to two closed types, so it has no inference, no
 type parameters, and no default parameters to consider. It is the relation the readers, the
-builders, and `Dynamic.to` use, and it is exposed so that format code can test before it calls a
+builders, and `Reflect.to` use, and it is exposed so that format code can test before it calls a
 function that would panic.
 
-`Type.default(t, name)` evaluates the default of field `name` of the named record type `t` and boxes
-it at the field's substituted type, resolved to a member as a reader resolves it (see Dynamic
-values). The evaluation is the one a literal performs (section 4, Field defaults): afresh on every
-call, in the scope of the declaration, so `tags: Array[string] = []` gives a new array each time,
-and a default that reads a variable reads its current value. The checker has already checked the
-default against the field's type, for every type argument of a generic record, so the box keeps the
-invariant. It panics when `t` is not a named record type, when the type has no field `name`, or when
-that field has no default, all of which `Type.shape` lets the caller test first. An encoder that
-leaves out fields equal to their defaults, `omitempty` in spirit, compares
-`Dynamic.field(d, f.name) == Type.default(t, f.name)` for each field whose `hasDefault` is set.
+`Reflect.default(t, name)` evaluates the default of field `name` of the named record type `t` and
+boxes it at the field's substituted type, resolved to a member as a reader resolves it (see
+Reflected values). The evaluation is the one a literal performs (section 4, Field defaults): afresh
+on every call, in the scope of the declaration, so `tags: Array[string] = []` gives a new array each
+time, and a default that reads a variable reads its current value. The checker has already checked
+the default against the field's type, for every type argument of a generic record, so the box keeps
+the invariant. It panics when `t` is not a named record type, when the type has no field `name`, or
+when that field has no default, all of which `Reflect.shape` lets the caller test first. An encoder
+that leaves out fields equal to their defaults, `omitempty` in spirit, compares
+`Reflect.field(d, f.name) == Reflect.default(t, f.name)` for each field whose `hasDefault` is set.
 
-### Dynamic values
+### Reflected values
 
 ```
-type Dynamic                                     // opaque: a value with a type it belongs to
-type Dynamic.Scalar = null | void | bool | int8 | int16 | int32 | int64
+type Reflect.Value                                                             // opaque: a value with a type it belongs to
+type Reflect.Scalar = null | void | bool | int8 | int16 | int32 | int64
   | uint8 | uint16 | uint32 | uint64 | float32 | float64 | string
 
-Dynamic.of[T](t: Type[T], value: T): Dynamic                   // the box; t's union resolved to value's member
-Dynamic.to[T](d: Dynamic, t: Type[T]): T                       // the value; panics unless d's type is assignable to T
-Dynamic.type(d: Dynamic): Type.Erased                          // never a union or an alias
+Reflect.valueOf[T](t: Reflect.Type[T], value: T): Reflect.Value                // the box; t's union resolved to value's member
+Reflect.to[T](d: Reflect.Value, t: Reflect.Type[T]): T                         // panics unless d's type is assignable to T
+Reflect.type(d: Reflect.Value): Reflect.ErasedType                             // never a union or an alias
 
 // Reading, along the type
-Dynamic.scalar(d: Dynamic): Dynamic.Scalar                     // panics unless the shape is Null, Void, Bool, Int, Float, or String
-Dynamic.items(d: Dynamic): Array[Dynamic]                      // an array's elements or a set's members, in a new array
-Dynamic.entries(d: Dynamic): Array[Entry[Dynamic, Dynamic]]    // a map's entries, in a new array
-Dynamic.field(d: Dynamic, name: string): Dynamic               // a field the record type lists
-Dynamic.payload(d: Dynamic): Dynamic                           // a named primitive's base value
+Reflect.scalar(d: Reflect.Value): Reflect.Scalar                               // panics unless the shape is Null, Void, Bool, Int, Float, or String
+Reflect.items(d: Reflect.Value): Array[Reflect.Value]                          // an array's elements or a set's members, in a new array
+Reflect.entries(d: Reflect.Value): Array[Entry[Reflect.Value, Reflect.Value]]  // a map's entries, in a new array
+Reflect.field(d: Reflect.Value, name: string): Reflect.Value                   // a field the record type lists
+Reflect.payload(d: Reflect.Value): Reflect.Value                               // a named primitive's base value
 
 // Building new values
-Dynamic.makeNumber(t: Type.Erased, n: Number): Dynamic | null  // an Int or Float type; null where the conversion would panic
-Dynamic.makeArray(t: Type.Erased, items: Array[Dynamic]): Dynamic
-Dynamic.makeSet(t: Type.Erased, members: Array[Dynamic]): Dynamic
-Dynamic.makeMap(t: Type.Erased, entries: Array[Entry[Dynamic, Dynamic]]): Dynamic
-Dynamic.makeRecord(t: Type.Erased, fields: Map[string, Dynamic]): Dynamic
-Dynamic.makeTagged(t: Type.Erased, payload: Dynamic): Dynamic
+Reflect.makeNumber(t: Reflect.ErasedType, n: Number): Reflect.Value | null     // an Int or Float type; null where the conversion would panic
+Reflect.makeArray(t: Reflect.ErasedType, items: Array[Reflect.Value]): Reflect.Value
+Reflect.makeSet(t: Reflect.ErasedType, members: Array[Reflect.Value]): Reflect.Value
+Reflect.makeMap(t: Reflect.ErasedType, entries: Array[Entry[Reflect.Value, Reflect.Value]]): Reflect.Value
+Reflect.makeRecord(t: Reflect.ErasedType, fields: Map[string, Reflect.Value]): Reflect.Value
+Reflect.makeTagged(t: Reflect.ErasedType, payload: Reflect.Value): Reflect.Value
 ```
 
-**The invariant.** In a checked program, the value in a `Dynamic` belongs to the `Dynamic`'s type.
+**The invariant.** In a checked program, the value in a `Reflect.Value` belongs to the box's type.
 Every function above keeps that invariant:
 
-- `Dynamic.of(t, v)` gets it from the checker, which has already checked that `v` is a `T`.
+- `Reflect.valueOf(t, v)` gets it from the checker, which has already checked that `v` is a `T`.
 - A reader returns a child at the type the parent's type gives that child: the element type, the key
   and value types, the field's substituted type, or the base. When that type is a union, the reader
   resolves it to the member the child's value belongs to. The union rules guarantee there is exactly
   one, found from the value's kind or tag alone (section 4, Unions): a record whose tag no named
   member has goes to the anonymous member, and a value of a sync type goes to the one sync member.
-  So `Dynamic.type` is never a union, and an encoder never has to choose a member.
+  So `Reflect.type` is never a union, and an encoder never has to choose a member.
 - A builder makes a new container or record, which nothing else refers to. It checks every part with
-  `Type.assignable` against the slot's type. That relation is the checker's own, so the new value is
-  one the checker could have built with a literal.
-- `Dynamic.to(d, t)` returns the value only when the stored type is assignable to `T`. That is the
+  `Reflect.assignable` against the slot's type. That relation is the checker's own, so the new value
+  is one the checker could have built with a literal.
+- `Reflect.to(d, t)` returns the value only when the stored type is assignable to `T`. That is the
   check an assignment would have made statically.
 
 Nothing in the runtime inspects contents to decide a type, and that is what makes the design sound
 with mutable containers. An empty `Array[int]` never becomes an `Array[string]`, because the box
-remembers that it was an `Array[int]`. Mutation never goes through a `Dynamic` (see Non-goals). A
-value taken out with `Dynamic.to` is written through its static type, as any value is.
+remembers that it was an `Array[int]`. Mutation never goes through a `Reflect.Value` (see
+Non-goals). A value taken out with `Reflect.to` is written through its static type, as any value is.
 
 **Builders.**
 
@@ -351,28 +356,28 @@ through an anonymous record type it reaches only the fields that type lists, eve
 has more. `scalar` gives a leaf in its own kind, so an encoder can render any number with
 `String.from` without testing ten kinds.
 
-**Unchecked runs.** `ant run` does not check annotations, and it does not check `Dynamic.of` deeply
-either. It checks that the value has the kind and tag that the type's discriminator names, which it
-needs anyway to resolve a union, and it trusts the rest as it trusts `var xs: Array[int]`. Builders,
-readers, and `Dynamic.to` check types fully, since those checks compare type values and cost nothing
-per element. So a mistyped unchecked program fails where it uses a wrong element, not at the box, as
-it does with a wrong annotation. `ant check` is what rules that out.
+**Unchecked runs.** `ant run` does not check annotations, and it does not check `Reflect.valueOf`
+deeply either. It checks that the value has the kind and tag that the type's discriminator names,
+which it needs anyway to resolve a union, and it trusts the rest as it trusts `var xs: Array[int]`.
+Builders, readers, and `Reflect.to` check types fully, since those checks compare type values and
+cost nothing per element. So a mistyped unchecked program fails where it uses a wrong element, not
+at the box, as it does with a wrong annotation. `ant check` is what rules that out.
 
-**Values of the new kinds.** A `Dynamic` is `==` to another when the types are equal and the values
-are `==`, and it renders as `Dynamic(42: int)`. Type values and dynamic values have no `is`
-discriminator. As with the sync rows of the table of Kinds, a union may hold at most one of
-`Type[T]`, `Type.Erased`, and `Dynamic`. `Json.stringify` panics on either kind, as it already does
-on a type.
+**Values of the new kinds.** A `Reflect.Value` is `==` to another when the types are equal and the
+values are `==`, and it renders as `Reflect.Value(42: int)`. Type values and reflected values have
+no `is` discriminator. As with the sync rows of the table of Kinds, a union may hold at most one of
+`Reflect.Type[T]`, `Reflect.ErasedType`, and `Reflect.Value`. `Json.stringify` panics on either
+kind, as it already does on a type.
 
 ### Visibility
 
 Reflection reaches every type that a nameable type leads to. A field of an exported `Config` may
-have a private type, and `Type.shape` will show it and the builders will build it. That matches what
-the runtime already does: `==`, `String.from`, and `Json.stringify` walk every field of every value
-whatever module declared its type, and section 4 makes every field of a record readable and writable
-by anyone who holds the record. In Ant, privacy applies to names and not to data (section 10), and a
-type whose invariant matters guards it with functions on the type (section 6). Reflection changes
-none of this. It cannot name a private type that the program cannot already reach.
+have a private type, and `Reflect.shape` will show it and the builders will build it. That matches
+what the runtime already does: `==`, `String.from`, and `Json.stringify` walk every field of every
+value whatever module declared its type, and section 4 makes every field of a record readable and
+writable by anyone who holds the record. In Ant, privacy applies to names and not to data (section
+10), and a type whose invariant matters guards it with functions on the type (section 6). Reflection
+changes none of this. It cannot name a private type that the program cannot already reach.
 
 ### Sketch: typed JSON on top
 
@@ -384,53 +389,53 @@ passes the checker as written.
 ```ant
 // typed.ant: JSON into and out of declared types, as library code
 
-let BytesType = Type.erase(type(Bytes))
+let BytesType = Reflect.erase(type(Bytes))
 
-export func decode[T](text: string, t: Type[T]): Result[T, Error] {
+export func decode[T](text: string, t: Reflect.Type[T]): Result[T, Error] {
   var tree = try Json.parse(text)
-  var d = try decodeAt(Type.erase(t), tree, "$")
-  Result.ok(Dynamic.to(d, t))
+  var d = try decodeAt(Reflect.erase(t), tree, "$")
+  Result.ok(Reflect.to(d, t))
 }
 
-func fail(path: string, message: string): Result[Dynamic, Error] {
+func fail(path: string, message: string): Result[Reflect.Value, Error] {
   Result.err(Error{ message: "${path}: ${message}" })
 }
 
-func decodeAt(t: Type.Erased, v: Json.Value, path: string): Result[Dynamic, Error] {
+func decodeAt(t: Reflect.ErasedType, v: Json.Value, path: string): Result[Reflect.Value, Error] {
   if t == BytesType {
     if !(v is string) { return fail(path, "want a base64 string") }
     var b = try (Encoding.fromBase64(v) | Result.wrapErr(path))
-    return Result.ok(Dynamic.of(type(Bytes), b))
+    return Result.ok(Reflect.valueOf(type(Bytes), b))
   }
-  var s = Type.shape(t)
-  if s is Type.Union {
+  var s = Reflect.shape(t)
+  if s is Reflect.Union {
     for m in s.members {
       var r = decodeAt(m, v, path)
       if r is Ok { return r }
     }
     fail(path, "want ${t}")
-  } else if s is Type.Null {
-    if v == null { Result.ok(Dynamic.of(type(null), null)) } else { fail(path, "want null") }
-  } else if s is Type.Bool {
-    if v is bool { Result.ok(Dynamic.of(type(bool), v)) } else { fail(path, "want true or false") }
-  } else if s is Type.String {
-    if v is string { Result.ok(Dynamic.of(type(string), v)) } else { fail(path, "want a string") }
-  } else if s is Type.Int || s is Type.Float {
-    var n = if v is float64 { Dynamic.makeNumber(t, v) } else { null }
+  } else if s is Reflect.Null {
+    if v == null { Result.ok(Reflect.valueOf(type(null), null)) } else { fail(path, "want null") }
+  } else if s is Reflect.Bool {
+    if v is bool { Result.ok(Reflect.valueOf(type(bool), v)) } else { fail(path, "want true or false") }
+  } else if s is Reflect.String {
+    if v is string { Result.ok(Reflect.valueOf(type(string), v)) } else { fail(path, "want a string") }
+  } else if s is Reflect.Int || s is Reflect.Float {
+    var n = if v is float64 { Reflect.makeNumber(t, v) } else { null }
     if n == null { fail(path, "want ${t}") } else { Result.ok(n) }
-  } else if s is Type.Named {
-    Result.ok(Dynamic.makeTagged(t, try decodeAt(s.base, v, path)))
-  } else if s is Type.Array {
+  } else if s is Reflect.Named {
+    Result.ok(Reflect.makeTagged(t, try decodeAt(s.base, v, path)))
+  } else if s is Reflect.Array {
     if !(v is Array) { return fail(path, "want an array") }
-    var items: Array[Dynamic] = []
+    var items: Array[Reflect.Value] = []
     for e in Array.entries(v) {
       Array.push(items, try decodeAt(s.element, e.value, "${path}[${e.index}]"))
     }
-    Result.ok(Dynamic.makeArray(t, items))
-  } else if s is Type.Record {
+    Result.ok(Reflect.makeArray(t, items))
+  } else if s is Reflect.Record {
     if s.name == null { return fail(path, "cannot decode into ${t}") }
     if !(v is Map) { return fail(path, "want an object") }
-    var fields: Map[string, Dynamic] = Map{}
+    var fields: Map[string, Reflect.Value] = Map{}
     for f in s.fields {
       if Map.has(v, f.name) {
         fields[f.name] = try decodeAt(f.type, v[f.name], "${path}.${f.name}")
@@ -438,34 +443,34 @@ func decodeAt(t: Type.Erased, v: Json.Value, path: string): Result[Dynamic, Erro
         return fail(path, "missing field ${f.name}")
       }
     }
-    Result.ok(Dynamic.makeRecord(t, fields))
+    Result.ok(Reflect.makeRecord(t, fields))
   } else {
     fail(path, "cannot decode ${t}")
   }
 }
 
-export func encode[T](t: Type[T], value: T): string {
-  encodeAt(Dynamic.of(t, value))
+export func encode[T](t: Reflect.Type[T], value: T): string {
+  encodeAt(Reflect.valueOf(t, value))
 }
 
-func encodeAt(d: Dynamic): string {
-  var t = Dynamic.type(d)
-  if t == BytesType { return Json.stringify(Encoding.toBase64(Dynamic.to(d, type(Bytes)))) }
-  var s = Type.shape(t)
-  if s is Type.Record {
+func encodeAt(d: Reflect.Value): string {
+  var t = Reflect.type(d)
+  if t == BytesType { return Json.stringify(Encoding.toBase64(Reflect.to(d, type(Bytes)))) }
+  var s = Reflect.shape(t)
+  if s is Reflect.Record {
     var members = Array.map(s.fields, {
-      Json.stringify(x.name) + ":" + encodeAt(Dynamic.field(d, x.name))
+      Json.stringify(x.name) + ":" + encodeAt(Reflect.field(d, x.name))
     })
     "{" + String.join(members, ",") + "}"
-  } else if s is Type.Map {
-    var members = Array.map(Dynamic.entries(d), { encodeAt(x.key) + ":" + encodeAt(x.value) })
+  } else if s is Reflect.Map {
+    var members = Array.map(Reflect.entries(d), { encodeAt(x.key) + ":" + encodeAt(x.value) })
     "{" + String.join(members, ",") + "}"
-  } else if s is Type.Array || s is Type.Set {
-    "[" + String.join(Array.map(Dynamic.items(d), encodeAt), ",") + "]"
-  } else if s is Type.Named {
-    encodeAt(Dynamic.payload(d))
+  } else if s is Reflect.Array || s is Reflect.Set {
+    "[" + String.join(Array.map(Reflect.items(d), encodeAt), ",") + "]"
+  } else if s is Reflect.Named {
+    encodeAt(Reflect.payload(d))
   } else {
-    Json.stringify(Dynamic.scalar(d))
+    Json.stringify(Reflect.scalar(d))
   }
 }
 ```
@@ -487,9 +492,10 @@ A map key decodes through `decodeAt` too, since a JSON key is a `string` and `st
 `Json.Value`, so `Map[UserId, int]` works with no special case. An error names its path, as in
 `$.servers[2].port: want int`. A real encoder rejects a map key whose text is not a JSON string, and
 handles `Time.Instant` and other opaque types through a table of codecs keyed by type value
-(`Map[Type.Erased, Codec]`), which works because type values are `==` and hash. A codec decodes with
-`Time.parseInstant` and boxes with `Dynamic.of(type(Time.Instant), instant)`. An encoder that leaves
-out default values tests each record field with `Type.default`, as above, before it writes it.
+(`Map[Reflect.ErasedType, Codec]`), which works because type values are `==` and hash. A codec
+decodes with `Time.parseInstant` and boxes with `Reflect.valueOf(type(Time.Instant), instant)`. An
+encoder that leaves out default values tests each record field with `Reflect.default`, as above,
+before it writes it.
 
 ## Spec changes
 
@@ -502,19 +508,21 @@ out default values tests each record field with `Type.default`, as above, before
 - **Section 4, Checking and running and Type declarations.** The body is kept, not discarded. "A
   type name is an expression only as …" gains a pointer to type expressions, and its own rule
   stands.
-- **Section 4, Kinds.** New rows for `Type[T]` and `Type.Erased` (kind type, no `is`, `==` by type
-  identity, rendered as the type, at most one per union with `Dynamic`) and for `Dynamic` (kind
-  dynamic, no `is`, `==` by type and value, rendered as `Dynamic(v: T)`).
+- **Section 4, Kinds.** New rows for `Reflect.Type[T]` and `Reflect.ErasedType` (kind type, no `is`,
+  `==` by type identity, rendered as the type, at most one per union with `Reflect.Value`) and for
+  `Reflect.Value` (kind reflected value, no `is`, `==` by type and value, rendered as
+  `Reflect.Value(v: T)`).
 - **Section 4, new subsection "Types as values".** Type expressions, closedness, equality, laziness,
-  and `Type.Erased`.
+  and `Reflect.ErasedType`.
 - **Section 5.** `type ( Type )` in the expression grammar, as a primary expression.
-- **Section 10.** `Type` and `Dynamic` join the prelude names that no program may shadow, so a
-  program that declares its own `Type` renames it.
-- **Section 11, new subsection "Type and Dynamic".** The listing above, the invariant, and the
-  builder and reader rules.
-- **Section 12.** In Values, the kinds type and dynamic, and a tag's kept body. In Expressions, the
-  evaluation of `type(T)`. In Runtime panics, the type expression's name resolution in the
-  checker-ruled-out column, and the documented panics of the `Dynamic` functions in the last column.
+- **Section 10.** `Reflect` joins the prelude names that no program may shadow. It is a namespace
+  that nothing declares, as `Os` is, and owns every name of this proposal.
+- **Section 11, new subsection "Reflect".** The listing above, the invariant, and the builder and
+  reader rules.
+- **Section 12.** In Values, the kinds type and reflected value, and a tag's kept body. In
+  Expressions, the evaluation of `type(T)`. In Runtime panics, the type expression's name resolution
+  in the checker-ruled-out column, and the documented panics of the `Reflect` functions in the last
+  column.
 - **stdlib.md, Json.** Replace "Typed decoding through reflection is deferred …" with a pointer to
   this section and to the JSON follow-up.
 
@@ -531,7 +539,7 @@ out default values tests each record field with `Type.default`, as above, before
   builds closed types, so `types.Param` and `types.Invalid` never reach these functions.
 - **Values** (`ant/value`). `value` cannot import `types`, which imports `value`, so `value`
   declares a small interface for a type value (equal, hash, render), and `ant/internal/lib`
-  implements it over `types.Type`. `Dynamic` is a value with such a type. `Tag` keeps the
+  implements it over `types.Type`. `Reflect.Value` is a value with such a type. `Tag` keeps the
   declaration's `ast.TypeDecl` and the environment it was declared in, as an opaque `any` beside
   `Defaults`.
 - **Declarations.** Each tag gets one `*types.Decl`, built the first time reflection reaches it and
@@ -543,8 +551,8 @@ out default values tests each record field with `Type.default`, as above, before
   into `types` and is shared with the checker. The structural walk mirrors the checker's
   `resolveType`, about forty lines. Any other name is evaluated to a tag or constructor, as `is`
   evaluates its target, and mapped to that tag's `Decl`. Where the checker would report an error,
-  the resolver panics. `TypeExpr` is resolved once per node and cached. Builders and `Type.default`
-  reuse `fillDefaults`, so a default runs exactly as it would in a literal.
+  the resolver panics. `TypeExpr` is resolved once per node and cached. Builders and
+  `Reflect.default` reuse `fillDefaults`, so a default runs exactly as it would in a literal.
 - **Prelude bodies.** Prelude tags are created in Go (`ant/internal/lib`), and their bodies exist
   only in `prelude.d.ant`. The first time reflection reaches a prelude tag, the runtime parses the
   embedded `prelude.d.ant`, which it does not otherwise read, and attaches each declaration to the
@@ -553,8 +561,8 @@ out default values tests each record field with `Type.default`, as above, before
 - **Hashing.** A type value hashes its top layer only, after expanding aliases: its kind, its `Decl`
   and the hashes of its arguments, and a union's members combined in any order. Equal types hash
   equally, and a recursive alias such as `Json.Value` cannot loop.
-- **Checker** (`ant/internal/check`). Type `TypeExpr` as `Type[T]`, reject free type parameters, and
-  declare the `Type` and `Dynamic` namespaces in `ant/internal/prelude/prelude.d.ant` with doc
+- **Checker** (`ant/internal/check`). Type `TypeExpr` as `Reflect.Type[T]`, reject free type
+  parameters, and declare the `Reflect` namespace in `ant/internal/prelude/prelude.d.ant` with doc
   comments.
 - **Library** (`ant/internal/lib`). The functions above, in a new `reflect.go`, and the type value
   implementation over `types.Type`.
@@ -564,13 +572,13 @@ out default values tests each record field with `Type.default`, as above, before
   types, generic records and named primitives with arguments, and prelude types, with every
   Go-created prelude tag matched to its declaration. Union resolution for each discriminator kind,
   including the anonymous member and a sync member. Every builder contract panic. Defaults filled by
-  `makeRecord` with fresh evaluation per call, and the same for `Type.default`, including a default
-  that reads a variable, a default of a generic record at two type arguments, a default of a local
-  type, and each of its panics. The soundness cases: an empty `Array[int]` boxed and unboxed as
-  `Array[string]` panics, `Array[Circle]` is refused for an `Array[Shape]` slot, and a `Person` is
-  accepted for a `{ name: string }` slot and read back through it with only `name`. An unchecked run
-  with a wrong `Dynamic.of` panics on kind. The JSON sketch above, run as a round-trip property test
-  over generated values of generated types.
+  `makeRecord` with fresh evaluation per call, and the same for `Reflect.default`, including a
+  default that reads a variable, a default of a generic record at two type arguments, a default of a
+  local type, and each of its panics. The soundness cases: an empty `Array[int]` boxed and unboxed
+  as `Array[string]` panics, `Array[Circle]` is refused for an `Array[Shape]` slot, and a `Person`
+  is accepted for a `{ name: string }` slot and read back through it with only `name`. An unchecked
+  run with a wrong `Reflect.valueOf` panics on kind. The JSON sketch above, run as a round-trip
+  property test over generated values of generated types.
 - **Benchmarks.** Before merging, measure the sketch against hand-written decoders on a 1 MB
   configuration and a 10 MB array of records. Expect several times slower: one box per node, plus
   the `Json.Value` tree in between. If the follow-up needs speed, `Json.decode` can be native with
@@ -578,11 +586,11 @@ out default values tests each record field with `Type.default`, as above, before
 
 ## Non-goals
 
-- **No mutation through reflection.** There is no `Dynamic.set` and no settable values in Go's
+- **No mutation through reflection.** There is no `Reflect.set` and no settable values in Go's
   sense. Builders make new values, and a program changes a value through its static type after
-  `Dynamic.to`. Decoding into an existing value is left to the follow-ups.
-- **No dynamic calls.** A `Dynamic` holding a function cannot be called without `Dynamic.to` at a
-  written function type.
+  `Reflect.to`. Decoding into an existing value is left to the follow-ups.
+- **No dynamic calls.** A `Reflect.Value` holding a function cannot be called without `Reflect.to`
+  at a written function type.
 - **No type of a value.** There is no `typeOf(v)`. A value carries no type arguments, and an empty
   `[]` gets its element type only from inference, which `ant run` never does. The type always comes
   from the program's text.
@@ -596,9 +604,9 @@ out default values tests each record field with `Type.default`, as above, before
 
 ## Alternatives considered
 
-- **Cast by inspection.** Drop the type from `Dynamic` and let `Dynamic.to` check the contents
+- **Cast by inspection.** Drop the type from `Reflect.Value` and let `Reflect.to` check the contents
   deeply. This is unsound with mutable containers. An empty `xs: Array[int]` passes a deep check as
-  `Array[string]`. After `var ys = Dynamic.to(d, type(Array[string]))` and `Array.push(ys, "a")`,
+  `Array[string]`. After `var ys = Reflect.to(d, type(Array[string]))` and `Array.push(ys, "a")`,
   `xs[0]` is a string that the checker typed as an `int`. Generic records have the same hole when
   they hold an empty array. Checking contents is sound only for immutable values, and it costs time
   proportional to their size. Storing the type is sound and costs one comparison.
@@ -609,10 +617,10 @@ out default values tests each record field with `Type.default`, as above, before
   type as decoding, so round trips would not be guaranteed. `Json.stringify` already covers untyped
   rendering. Open question 2 keeps the door open for debuggers.
 - **Runtime-driven visitors, as in serde's `Deserializer`.** The runtime walks the type and calls a
-  record of format callbacks, so no `Dynamic` is needed. But the walk order, the choice of union
-  member, and the handling of missing fields are then fixed in the runtime, and every format that
-  wants different policy fights the walker. With `Dynamic`, the format's own recursion is ordinary
-  Ant code that it controls.
+  record of format callbacks, so no `Reflect.Value` is needed. But the walk order, the choice of
+  union member, and the handling of missing fields are then fixed in the runtime, and every format
+  that wants different policy fights the walker. With `Reflect.Value`, the format's own recursion is
+  ordinary Ant code that it controls.
 - **The bare type name as a value.** `Json.decode(text, Config)` could work, since a record tag is a
   run-time value already. It covers named records only, not `Array[Config]`, `int | null`, or
   `Map[string, Server]`, and it would undo section 4's rule that a type name is not a value. The
@@ -628,13 +636,13 @@ out default values tests each record field with `Type.default`, as above, before
 - **Explicit type arguments at call sites**, `Json.decode[Config](text)`. Section 4 forbids them,
   `[` after a name already means indexing, and under erasure the argument would still have to be
   passed as a value. That would be this proposal with a second syntax.
-- **A deep `Dynamic.of` check under `ant run`.** Walking the whole value at the box would report a
-  mistyped unchecked program there rather than at a later use. It costs time proportional to the
-  value's size on every call, and since `ant run` never knows whether `ant check` passed, that cost
-  falls on checked programs too. It would still not make unchecked programs sound: an empty
-  `Array[string]` passes as `Array[int]`, and a value changed through another reference after boxing
-  is never seen again. Nothing else in the runtime checks a value against a written type, and the
-  implementation stays simpler without it. A debugging mode that checks annotations deeply
+- **A deep `Reflect.valueOf` check under `ant run`.** Walking the whole value at the box would
+  report a mistyped unchecked program there rather than at a later use. It costs time proportional
+  to the value's size on every call, and since `ant run` never knows whether `ant check` passed,
+  that cost falls on checked programs too. It would still not make unchecked programs sound: an
+  empty `Array[string]` passes as `Array[int]`, and a value changed through another reference after
+  boxing is never seen again. Nothing else in the runtime checks a value against a written type, and
+  the implementation stays simpler without it. A debugging mode that checks annotations deeply
   everywhere could come later as its own proposal.
 - **Code generation** (`ant gen`, derive). It is fast and needs no runtime support, but it adds a
   build step that Ant does not have, generates code per type, and has to run again whenever a
@@ -646,27 +654,29 @@ out default values tests each record field with `Type.default`, as above, before
   structures and its own copy of section 4's assignability, kept in step with the checker by a test
   over generated pairs. Reusing `types.Type` removes the second copy, and the one place the two
   could disagree.
-- **Other names.** `Reflect.Value` for `Dynamic` would follow Go, and `Dynamic` follows Haskell and
-  Gleam and is shorter at every call. `Type.Any` for `Type.Erased` would suggest the top type that
-  Ant does not have.
-- **Making `Type[T]` assignable to `Type.Erased`.** This would remove the `Type.erase` calls, and it
-  would be sound, since an erased type exposes nothing typed. But it would be the one implicit
-  conversion in section 4's assignability rules, made for one library. `never` is assignable to
-  everything because it is the bottom type, not as a conversion, and Ant converts nothing
-  implicitly, not even numbers. The calls are few and only in format code: one at the entry
-  (`Type.erase(t)`) and one per type constant, written once as a `let`. Callers write
-  `decode(text, type(Config))` and never erase. An explicit `Type.erase` also marks where the static
-  type is given up, as `Dynamic.to` marks where it comes back.
+- **Other names.** `Type[T]`, `Type.Erased`, and `Dynamic`, after Haskell and Gleam, read shorter in
+  signatures but take two common names from every program, `Type` above all, and split one feature
+  over two namespaces. `Reflect` takes one name, groups the feature for completion, and follows Go's
+  `reflect.Type` and `reflect.Value`. `Reflect.AnyType` for `Reflect.ErasedType` would suggest the
+  top type that Ant does not have. Unlike Go's, a `Reflect.Value` is never settable.
+- **Making `Reflect.Type[T]` assignable to `Reflect.ErasedType`.** This would remove the
+  `Reflect.erase` calls, and it would be sound, since an erased type exposes nothing typed. But it
+  would be the one implicit conversion in section 4's assignability rules, made for one library.
+  `never` is assignable to everything because it is the bottom type, not as a conversion, and Ant
+  converts nothing implicitly, not even numbers. The calls are few and only in format code: one at
+  the entry (`Reflect.erase(t)`) and one per type constant, written once as a `let`. Callers write
+  `decode(text, type(Config))` and never erase. An explicit `Reflect.erase` also marks where the
+  static type is given up, as `Reflect.to` marks where it comes back.
 
 ## Open questions
 
 1. **Per-type hooks.** The functions declared on a type are fields of its tag (section 6), so
-   reflection could offer `Type.function(t, "fromJson")` for Go-style `MarshalJSON` hooks by naming
-   convention. This draft leaves hooks to codec tables keyed by type value, which are explicit and
-   need no convention. Calling a function found by name would also need `Dynamic.call`.
+   reflection could offer `Reflect.function(t, "fromJson")` for Go-style `MarshalJSON` hooks by
+   naming convention. This draft leaves hooks to codec tables keyed by type value, which are
+   explicit and need no convention. Calling a function found by name would also need `Reflect.call`.
 2. **Untyped inspection.** Debuggers, `assert`'s value rendering, and generic printers walk values
-   without a type. Today that is internal to the runtime. A read-only `Dynamic.inspect[T](v: T)`
+   without a type. Today that is internal to the runtime. A read-only `Reflect.inspect[T](v: T)`
    whose children could never be unboxed into containers would serve them. It is left out until a
    library needs it.
-3. **Frozen values.** If `frozen.md` is accepted, `Type.shape` needs a `Frozen` member or a flag,
+3. **Frozen values.** If `frozen.md` is accepted, `Reflect.shape` needs a `Frozen` member or a flag,
    and builders need a frozen variant or a rule that `freeze` applies afterwards.

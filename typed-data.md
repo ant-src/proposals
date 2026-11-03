@@ -4,11 +4,11 @@
 
 ## Summary
 
-A follow-up to `reflection.md`, which adds the mechanism: `type(T)` as a value of type `Type[T]`,
-`Type.shape` to take a type apart, and `Dynamic` boxes with readers and builders that keep every
-value sound. That proposal deliberately has no policy, so every format would write its own walk over
-types: union choice, missing and unknown fields, defaults, error paths. This proposal is the shared
-layer on top, so that a format only converts its own syntax:
+A follow-up to `reflection.md`, which adds the mechanism: `type(T)` as a value of type
+`Reflect.Type[T]`, `Reflect.shape` to take a type apart, and `Reflect.Value` boxes with readers and
+builders that keep every value sound. That proposal deliberately has no policy, so every format
+would write its own walk over types: union choice, missing and unknown fields, defaults, error
+paths. This proposal is the shared layer on top, so that a format only converts its own syntax:
 
 - **`Type.Data`**, a closed, format-neutral tree: null, bool, three number kinds, string, `Bytes`,
   arrays and string-keyed maps.
@@ -28,9 +28,9 @@ var config = try Json.decode(text, type(Config))
 
 A format that agrees with this policy is a converter between its syntax and `Type.Data`: YAML, TOML,
 CSV rows, environment variables, command-line flags, query strings. A format that does not, such as
-XML with attributes or JSON with base64 `Bytes`, walks the type with `reflection.md`'s `Dynamic`
-directly and keeps full control. The two paths are the point: serde's lesson that a shared data
-model turns N formats times M types into N plus M, without taking away the lower layer.
+XML with attributes or JSON with base64 `Bytes`, walks the type with `reflection.md`'s
+`Reflect.Value` directly and keeps full control. The two paths are the point: serde's lesson that a
+shared data model turns N formats times M types into N plus M, without taking away the lower layer.
 
 Nothing here works without `reflection.md`, and nothing here changes it.
 
@@ -120,11 +120,11 @@ Every `Json.Value` is a `Type.Data` value at run time, but the checker still nee
 ### 2. Building: `Type.build`
 
 ```
-Type.build[T](t: Type[T], data: Type.Data, coerce: bool = false,
+Type.build[T](t: Reflect.Type[T], data: Type.Data, coerce: bool = false,
               key: func(string): string | null = null, tag: string | null = null): Result[T, Error]
 ```
 
-`Type.build` walks the type, with `Type.shape`, and the data together, and builds the value with
+`Type.build` walks the type, with `Reflect.shape`, and the data together, and builds the value with
 `reflection.md`'s builders, so the value it returns is sound for the same reasons theirs are.
 
 | Target type              | Accepts                                                                                                                     |
@@ -145,7 +145,7 @@ Type.build[T](t: Type[T], data: Type.Data, coerce: bool = false,
 an error, including for a field typed `T | null`, since a record literal needs that field too; a
 field that may be absent declares `= null`. This differs from Go, which fills a missing field with
 its zero value, because Ant has no zero values. A default is evaluated as in a literal, which
-`Dynamic.makeRecord` already does.
+`Reflect.makeRecord` already does.
 
 **Map keys.** `K` must be `string`, an integer kind, or a named primitive over one of them. An
 integer key is read from its decimal string, so `{"1": "a"}` builds a `Map[int, string]`, as in Go.
@@ -173,8 +173,8 @@ on. A union is buildable when no two members read the same kind, with three refi
 A union that breaks these rules, such as `UserId | string` or `Circle | Rect` without a tag, cannot
 be built, which is a program error (see Panics). A program that needs another shape decodes that
 part into a `Type.Data` field and finishes it by hand, declares a hook on the record that holds it,
-or walks it with `Dynamic`. `Type.Data` and `Json.Value` are buildable under these rules, so a field
-of either type keeps its subtree for later, at the cost of a copy.
+or walks it with `Reflect.Value`. `Type.Data` and `Json.Value` are buildable under these rules, so a
+field of either type keeps its subtree for later, at the cost of a copy.
 
 **`coerce: true`** is for formats whose every value is text: CSV, environment variables, query
 strings, command-line flags. With it, a string also builds a number (as `String.toInt` and
@@ -192,8 +192,8 @@ path uses `.name` for a field or map key and `[i]` for an array index, as `stdli
 for JSON. `Type.build` stops at the first error, as Go does.
 
 **Panics.** A type that `Type.build` cannot build is a program error, not a data error: one whose
-shape is `Type.Func` or `Type.Opaque` (other than `Bytes` and the time types), `Type.Void`,
-`Type.Never`, an anonymous record type (which `Dynamic.makeRecord` refuses), a map key of another
+shape is `Reflect.Func` or `Reflect.Opaque` (other than `Bytes` and the time types), `Reflect.Void`,
+`Reflect.Never`, an anonymous record type (which `Reflect.makeRecord` refuses), a map key of another
 type, or a union that breaks the rules above. `Type.build` checks the whole type, with these
 options, before it reads the data, and panics with the path to the part, such as
 `Type.build: $.onSave: a function cannot be built`. The checker reports the same thing as a compile
@@ -203,7 +203,7 @@ when `Handler` holds a function.
 ### 3. Taking apart: `Type.data`
 
 ```
-Type.data[T](t: Type[T], value: T, key: func(string): string | null = null,
+Type.data[T](t: Reflect.Type[T], value: T, key: func(string): string | null = null,
              tag: string | null = null): Type.Data
 ```
 
@@ -248,7 +248,7 @@ The functions on a type are fields of its tag at run time (section 6, Functions 
 
 Hooks are format-neutral: one `Port.fromData` serves JSON, YAML and the environment alike. A format
 that needs a per-format override, such as JSON writing `Time.Instant` differently from YAML, keeps a
-codec table keyed by type value on the `Dynamic` path, as `reflection.md` sketches.
+codec table keyed by type value on the `Reflect.Value` path, as `reflection.md` sketches.
 
 A legacy format that stores a port as a string:
 
@@ -282,9 +282,9 @@ Later).
 ### 5. JSON on top
 
 ```
-Json.decode[T](text: string, t: Type[T], key: func(string): string | null = null,
+Json.decode[T](text: string, t: Reflect.Type[T], key: func(string): string | null = null,
                tag: string | null = null): Result[T, Error]                       // Type.build(t, Json.toData(try Json.parse(text)), …)
-Json.encode[T](t: Type[T], value: T, indent: string = "", key: func(string): string | null = null,
+Json.encode[T](t: Reflect.Type[T], value: T, indent: string = "", key: func(string): string | null = null,
                tag: string | null = null): string                                 // Json.stringify(Json.fromData(Type.data(t, value, …)), indent)
 Json.toData(v: Json.Value): Type.Data                                             // a copy
 Json.fromData(d: Type.Data): Json.Value                                           // integers become float64; panics on Bytes
@@ -295,7 +295,7 @@ passes, as serde's `#[serde(tag = "kind")]` does, so `{"kind": "circle", "radius
 `tag: "kind", key: Type.snakeCase`. `Json.stringify` and `Json.parse` stay as they are.
 `Json.encode` differs from `Json.stringify` in calling `toData` hooks, writing the tag entry,
 writing integer map keys as strings, and checking the value against the type. A JSON that carries
-`Bytes` as base64 is a different policy and walks the type with `Dynamic` instead.
+`Bytes` as base64 is a different policy and walks the type with `Reflect.Value` instead.
 
 The sentence of `stdlib.md` that defers typed decoding is replaced by these four functions.
 
@@ -308,7 +308,7 @@ A CSV reader with a header line, one record per row:
 ```ant
 // Decodes CSV text with a header line into one T per row. A short row leaves the
 // remaining fields to their defaults.
-export func decodeRows[T](text: string, row: Type[T]): Result[Array[T], Error] {
+export func decodeRows[T](text: string, row: Reflect.Type[T]): Result[Array[T], Error] {
   var rows = try Csv.parse(text)
   if len(rows) == 0 { return Result.ok([]) }
   var header = rows[0]
@@ -325,22 +325,22 @@ export func decodeRows[T](text: string, row: Type[T]): Result[Array[T], Error] {
 }
 ```
 
-A `--help` text from an options record, with `reflection.md`'s `Type.shape` alone:
+A `--help` text from an options record, with `reflection.md`'s `Reflect.shape` alone:
 
 ```ant
 // Lists the flags of an options record, one per line.
-export func usage[T](options: Type[T]): string {
-  var s = Type.shape(Type.erase(options))
-  if !(s is Type.Record) { panic("usage: options must be a record") }
+export func usage[T](options: Reflect.Type[T]): string {
+  var s = Reflect.shape(Reflect.erase(options))
+  if !(s is Reflect.Record) { panic("usage: options must be a record") }
   s.fields
     | Array.map({ "  --${Type.kebabCase(x.name)}${if x.hasDefault { "" } else { " (required)" }}" })
     | String.join("\n")
 }
 ```
 
-The same pattern gives environment variables (`Type.shape` for the field names, `Type.build` with
+The same pattern gives environment variables (`Reflect.shape` for the field names, `Type.build` with
 `coerce: true`), YAML and TOML (their tree to `Type.Data`), and JSON Schema (a walk over
-`Type.shape`).
+`Reflect.shape`).
 
 ## Under consideration: field annotations
 
@@ -378,7 +378,7 @@ type Description = string         // a JSON Schema library's own annotation
 A library reads an annotation back by its type, which keeps the result typed without a top type:
 
 ```
-Type.annotation[A](record: Type.Erased, field: string, a: Type[A]): A | null
+Type.annotation[A](record: Reflect.ErasedType, field: string, a: Reflect.Type[A]): A | null
 ```
 
 ```ant
@@ -426,13 +426,13 @@ The rules this would need:
 ## Costs
 
 - **A policy in the standard library.** Every rule in section 2 is a decision that some format will
-  disagree with. The `Dynamic` path is the answer for those formats, but users will meet this policy
-  first and expect every format to follow it.
+  disagree with. The `Reflect.Value` path is the answer for those formats, but users will meet this
+  policy first and expect every format to follow it.
 - **Hooks reserve three names.** A function on a type named `fromData`, `toData` or `validate` must
   have the hook's signature. A type cannot have a `validate` that is not a hook.
-- **A second walk beside `Dynamic`'s.** If `Type.build` is native, it duplicates in Go what Ant code
-  over `Dynamic` could do. The reference semantics are the Ant ones, and a test keeps the two in
-  step (see Implementation).
+- **A second walk beside `Reflect.Value`'s.** If `Type.build` is native, it duplicates in Go what
+  Ant code over `Reflect.Value` could do. The reference semantics are the Ant ones, and a test keeps
+  the two in step (see Implementation).
 
 ## Spec changes
 
@@ -451,9 +451,10 @@ removed.
 ## Implementation
 
 - **Reference.** Write `Type.build` and `Type.data` first as Ant code over `reflection.md`'s
-  `Dynamic`, extending its JSON sketch to `Type.Data`. That pins the semantics down in terms of the
-  lower layer and proves that layer sufficient. Calling hooks from Ant needs `Dynamic.call` or a
-  codec table (`reflection.md`, open question 1); the reference uses a table built from the tags.
+  `Reflect.Value`, extending its JSON sketch to `Type.Data`. That pins the semantics down in terms
+  of the lower layer and proves that layer sufficient. Calling hooks from Ant needs `Reflect.call`
+  or a codec table (`reflection.md`, open question 1); the reference uses a table built from the
+  tags.
 - **Native.** Then implement both in Go over the same descriptors, since every format on this path
   goes through them. `reflection.md` expects the Ant walk to be several times slower than
   hand-written decoders; native code removes the box per node. Run the reference and the native
@@ -471,7 +472,7 @@ removed.
 ## Non-goals
 
 - **No mechanism.** Type values, shapes, boxes and builders are `reflection.md`'s.
-- **No policy for every format.** A format that disagrees with section 2 uses `Dynamic`.
+- **No policy for every format.** A format that disagrees with section 2 uses `Reflect.Value`.
 - **No per-field attributes in this draft.** Field annotations above are a candidate to decide
   separately.
 
@@ -480,11 +481,11 @@ removed.
 - **Policy in the mechanism.** An earlier draft of this proposal, as `reflect.md`, put type values,
   type descriptions and `Type.build` in one design. It could not express a format whose rules
   differ, such as JSON with base64 `Bytes` or XML attributes, because `Type.build` was the only way
-  to make a value. `reflection.md`'s policy-free `Dynamic` underneath fixes that, and this proposal
-  became the layer above it.
-- **Every format on `Dynamic` alone.** Sound and flexible, but each format repeats the walk and its
-  decisions, and a program that reads one type from a file and from the environment meets two
-  policies.
+  to make a value. `reflection.md`'s policy-free `Reflect.Value` underneath fixes that, and this
+  proposal became the layer above it.
+- **Every format on `Reflect.Value` alone.** Sound and flexible, but each format repeats the walk
+  and its decisions, and a program that reads one type from a file and from the environment meets
+  two policies.
 - **A built-in `Json.decode` only.** It solves JSON and nothing else, and the next format needs the
   same work again.
 - **Trying union members in order**, as `reflection.md`'s sketch does as a placeholder. The data
@@ -503,12 +504,12 @@ removed.
 ## Later
 
 - **Hooks on generic types**, which would need a signature that receives the type arguments, such as
-  `func Page.fromData[T](d: Type.Data, t: Type[Page[T]])`.
+  `func Page.fromData[T](d: Type.Data, t: Reflect.Type[Page[T]])`.
 - **A strict mode** for unknown keys, as Go's `DisallowUnknownFields`.
 - **Every error at once**, as pydantic reports, as one message with a line per error.
 - **Non-string map keys and time values in `Type.Data`**, for MessagePack and CBOR keys and for TOML
   and YAML dates.
-- **Omitting defaults on encode**, `omitempty` in spirit, which `reflection.md`'s `Type.default`
+- **Omitting defaults on encode**, `omitempty` in spirit, which `reflection.md`'s `Reflect.default`
   makes possible.
 
 ## Open questions
@@ -524,7 +525,9 @@ removed.
    `tags: Map{ "c": type Circle, … }`, worth adding?
 3. **Field annotations.** Adopt the typed `@` annotations above in place of `key` and `tag`, keep
    the call options, or both?
-4. **Namespace.** This draft puts `Type.Data`, `Type.build` and `Type.data` in `reflection.md`'s
-   `Type` namespace, which adds no prelude name but mixes the policy layer into the mechanism's
-   namespace. A namespace of its own, such as `Data.build`, reads well but claims a common name that
-   no program could then declare.
+4. **Namespace.** `reflection.md` now puts everything under `Reflect`, so `Type` is no longer a
+   prelude namespace, and this draft's `Type.Data`, `Type.build`, `Type.data`, `Type.snakeCase` and
+   the rest would claim it as a new prelude name that no program could declare. The choices are
+   `Reflect.build` and `Reflect.Data`, which add no name but mix this policy layer into the
+   mechanism's namespace, or a namespace of its own, such as `Data.build`, which reads well but
+   claims a common name.
