@@ -1,6 +1,6 @@
 # Proposal: Reflect cleanup
 
-2026-11-04 · Anton · Draft
+2026-11-04 · Anton · Accepted
 
 ## Summary
 
