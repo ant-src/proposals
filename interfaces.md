@@ -137,7 +137,8 @@ At run time a call whose callee is `x.f`:
 | a string, `Bytes`, `Html`, an array, a map, a set             | `String`, `Bytes`, `Html`, `Array`, `Map`, `Set`                                                                                               |
 | `Ok`, `Err`                                                   | `Result`                                                                                                                                       |
 | a value of a prelude type `N`, or of a type `N.T` it declares | `N`: `Mutex`, `Channel`, `Error`, …; `File` for `File.Handle`, `Time` for `Time.Instant`, `Regex` for `Regex.Pattern`, `Cmd` for `Cmd.Process` |
-| a number, `bool`, `null`, `void`, a function                  | none (Decisions 4; open question 3)                                                                                                            |
+| a function                                                    | `Iter`, for sequences (Decision 7)                                                                                                             |
+| a number, `bool`, `null`, `void`                              | none (Decision 4)                                                                                                                              |
 
 That is the whole run-time rule. Only the call form changes: `x.f` outside a call is a field read,
 as today, so a namespace function is reached only by calling it. `var g = p.norm` is a compile error
@@ -160,7 +161,7 @@ The checker resolves `x.f(…)` by the static type of `x`, fields first:
 | a union whose every member has one   | `f` for every member; each must accept the arguments, and the result is the union of results  |
 | an interface                         | the interface's `f`, with `Self` as the interface                                             |
 | a type parameter                     | as for its bound                                                                              |
-| anything else                        | a compile error: numbers, functions, anonymous record types without the field                 |
+| anything else                        | a compile error: numbers, `bool`, anonymous record types without the field                    |
 
 The checker and the interpreter agree because no value has both a field and a function of one name:
 section 6 forbids it for user types, and a field never satisfies an interface function (Interfaces,
@@ -172,6 +173,14 @@ The first-parameter condition makes the few namespaces that mix receivers safe: 
 functions on paths and on handles, and `h.writeLine(line)` resolves while `h.write(text)` is a
 compile error. A function with no parameters, such as `Point.origin()`, is never reached through a
 value.
+
+The same condition makes the function row safe. Every function value's namespace is `Iter`, and
+every function of `Iter` that takes a receiver takes a `Seq[T]`, so
+`Iter.range(0, 9).filter(f).take(5)` checks while `handler.map(f)` on a `func(Request): Response` is
+a compile error that says the function is not a sequence. On an array `.filter` is `Array.filter`,
+eager; on a sequence it is `Iter.filter`, lazy. The receiver's type decides, as in JavaScript's
+iterator helpers and Rust. An unchecked call of an `Iter` function on a function that is not a
+sequence panics inside it, as any wrong call does.
 
 The union row is the field rule of section 4, Tagged unions, applied to functions: a union of types
 that each have `area` can call `s.area()` without an interface, and `Cmd | Cmd.Pipeline` calls into
@@ -211,9 +220,11 @@ interface Container[T] {
 
 `interface` declares a name at the top level of a module, and `export interface` exports it. The
 body lists signatures, one per line, in the syntax of a function type with parameter names. The
-first parameter of each is the receiver, of type `Self`, the satisfying type. The body has at least
-one function, so no interface is satisfied by everything and none is a top type. An interface may
-take type parameters; its functions may not take their own.
+first parameter of each is the receiver, of type `Self`, the satisfying type. `Self` is a reserved
+word that is legal only in an interface's signatures; anywhere else, `var x: Self` or
+`type Self = …`, it is a syntax error, so it never has a second meaning. The body has at least one
+function, so no interface is satisfied by everything and none is a top type. An interface may take
+type parameters; its functions may not take their own.
 
 A type `S` satisfies `I` when, for each function `f` of `I`, `.f(…)` on an `S` resolves (the checker
 table above) to a namespace function, not a field, visible where the checker asks, whose type with
@@ -260,6 +271,14 @@ var queue: Array[Compare] = []       // compile error: Compare is a bound only
 A union solves an interface bound only when the interface is a type, matching the rule that a union
 bound takes a single member.
 
+**Type or bound.** For an interface that is a type, both forms are legal and behave the same at run
+time, where types are erased. They differ only in what the checker accepts. `xs: Array[Shape]` takes
+a mixed array but not an `Array[Circle]`, since containers are invariant, and its results are
+`Shape`s. `[T: Shape](xs: Array[T])` takes either, `T = Shape` for a mixed array, and its results
+keep `T`, so `largest` of an `Array[Circle]` is a `Circle`. The guide is the one section 4 already
+gives for union bounds, `choose(a: Number, b: Number)` beside `bigger[T: Ordered]`: take the
+interface, and use a bound when the result must keep the caller's type.
+
 **What an interface is not.** It is not a value or a namespace: `Shape.area` and `is Shape` are
 compile errors. `is` cannot test an interface, because at run time it could test names but not
 signatures. It has no discriminator, so a union holds it only beside `null` and `void`:
@@ -278,7 +297,7 @@ The spec gets one paragraph of guidance:
 - A function from the receiver's own namespace may be called with `.`, `xs.map(f)`, or through the
   namespace, `xs | Array.map(f)` and `Array.map(xs, f)`. All three are legal and none is preferred;
   `ant fmt` keeps the one the author wrote. Any other function, a module's or another namespace's,
-  is called plainly or through `|`: `seq | Iter.take(5)`, `v | Json.stringify()`, `n | Port`.
+  is called plainly or through `|`: `xs | Iter.fromArray()`, `v | Json.stringify()`, `n | Port`.
 - State captured at construction, such as a handler and its configuration, stays a record of
   closures.
 
@@ -355,8 +374,9 @@ var port = (m.get("port") ?? "80").trim()
 
 ## Spec changes
 
-- §2 Lexical structure: `interface` moves from reserved words to keywords; `Self` is a type name
-  inside an interface body. No new token, and the continuation rule already covers a leading `.`.
+- §2 Lexical structure: `interface` moves from reserved words to keywords; `Self` joins the reserved
+  words, legal only in an interface's signatures. No new token, and the continuation rule already
+  covers a leading `.`.
 - §4 Types: a subsection, Interfaces: declaration, satisfaction, type or bound, the union rule; a
   row in the table of Kinds; Generics drops "There are no interfaces" and gains interface bounds;
   Assignability gains the interface rules; Type declarations drops "interfaces" from "no classes,
@@ -446,7 +466,7 @@ three things: a field, a namespace function bound to `x`, or an error. Ant keeps
 
 ## Decisions
 
-Review on 2026-11-04 settled four questions.
+Review on 2026-11-04 settled seven questions.
 
 1. **No fields in interfaces.** An interface lists functions only. A structural shape over fields
    stays an anonymous record type or bound, `[T: { name: string }]`, and stays unnamed.
@@ -462,12 +482,19 @@ Review on 2026-11-04 settled four questions.
    `x | Math.abs()` stay the spellings. `Math` mixes functions on every number, on `float64` only,
    and on none (`Math.random()`), and `Bits` would be left out, so no kind maps to it.
 
+5. **Interface type and bound both stay.** `func total(xs: Array[Shape])` and
+   `func total[T: Shape](xs: Array[T])` are both legal, as `Number` and `[T: Ordered]` are today.
+   Take the interface; use a bound when the result must keep the caller's type (Interfaces, Type or
+   bound).
+6. **`Self` is a reserved word,** legal only in an interface's signatures. The interface's own name
+   in the receiver position was rejected because `compare(a: Compare, b: Compare)` would mean any
+   two comparable values rather than two of one type, and an explicit parameter, `[T: Compare[T]]`,
+   because every use would repeat `T`.
+7. **Functions use `Iter` as their namespace,** so sequences chain like arrays:
+   `Iter.range(0, 1000).filter(f).take(5).toArray()`. The checker's first-parameter rule rejects a
+   function that is not a `Seq`. The cost is that a future namespace for functions themselves would
+   need another name.
+
 ## Open questions
 
-1. **Bound or type for `Self`-receiver interfaces.** `func total(xs: Array[Shape])` and
-   `func total[T: Shape](xs: Array[T])` overlap. The rule here follows Go: take the interface type,
-   and use a bound when the result must keep `T`.
-2. **`Self`.** A reserved word, or a type name only inside interface bodies.
-3. **Sequences.** A `Seq[T]` is a function, so `seq.filter(f)` would mean every function value
-   searches `Iter`. Useful for pipelines, odd for every other function. The alternative is
-   `seq | Iter.filter(f)` as now.
+None at the moment.
