@@ -452,9 +452,12 @@ removed.
 
 - **Reference.** Write `Type.build` and `Type.data` first as Ant code over `reflection.md`'s
   `Reflect.Value`, extending its JSON sketch to `Type.Data`. That pins the semantics down in terms
-  of the lower layer and proves that layer sufficient. `reflection.md` has no `Reflect.call` (Alternatives,
-  "Hooks found by name"), so the reference calls hooks through a table built from the tags and
-  keyed by `Reflect.Decl`.
+  of the lower layer and proves that layer sufficient. `reflection.md` finds no function by name and
+  has no `Reflect.call` (Alternatives, "Hooks found by name"), so the reference takes its hooks as a
+  table written by hand, `Map[Reflect.Decl, Hooks]`, where `Hooks` holds `fromData`, `toData` and
+  `validate` wrapped over `Reflect.Value`. A test helper registers each type that declares hooks.
+  The native version finds the hooks on the tag, where the checker has already checked their
+  signatures, and a test runs both on the same types.
 - **Native.** Then implement both in Go over the same descriptors, since every format on this path
   goes through them. `reflection.md` expects the Ant walk to be several times slower than
   hand-written decoders; native code removes the box per node. Run the reference and the native

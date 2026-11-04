@@ -151,9 +151,8 @@ a == type(int64)                          // true: int is an alias of int64
 - **Closed types only.** `T` may not mention a type parameter of an enclosing function or type
   (including a default in a generic record), since the runtime has nothing bound to that name. This
   is a compile error that says to take a `Reflect.Type[T]` parameter instead, and to build larger
-  types from it with the builders below (Building type values). A generic type needs
-  its arguments, as in an annotation, so `type(Box)` is a compile error and `type(Box[int])` is
-  fine.
+  types from it with the builders below (Building type values). A generic type needs its arguments,
+  as in an annotation, so `type(Box)` is a compile error and `type(Box[int])` is fine.
 - **A type name alone is still not a value.** Section 4's rule stands: `Config` in expression
   position remains a compile error except as a literal head, an `is` target, a namespace, or a
   constructor. `type(Config)` is the value.
@@ -190,9 +189,9 @@ Reflect.mapOf[K, V](k: Reflect.Type[K], v: Reflect.Type[V]): Reflect.Type[Map[K,
 Reflect.nullable[T](t: Reflect.Type[T]): Reflect.Type[T | null]
 ```
 
-Each result is `==` to the type expression it stands for: `Reflect.arrayOf(type(int)) ==
-type(Array[int])`, and `Reflect.nullable(type(int | null)) == type(int | null)`, since unions
-flatten.
+Each result is `==` to the type expression it stands for:
+`Reflect.arrayOf(type(int)) == type(Array[int])`, and
+`Reflect.nullable(type(int | null)) == type(int | null)`, since unions flatten.
 
 ```ant
 func decodeAll[T](text: string, t: Reflect.Type[T]): Result[Array[T], Error] {
@@ -262,7 +261,7 @@ type Reflect.Field = { name: string, type: Reflect.ErasedType, hasDefault: bool 
 type Reflect.Named = { name: string, decl: Reflect.Decl, args: Array[Reflect.ErasedType], base: Reflect.ErasedType }   // a named primitive type
 type Reflect.Union = { members: Array[Reflect.ErasedType] }
 type Reflect.Func = { params: Array[Reflect.ErasedType], result: Reflect.ErasedType }
-type Reflect.Opaque = { name: string }
+type Reflect.Opaque = { name: string, decl: Reflect.Decl, args: Array[Reflect.ErasedType] }
 ```
 
 - **Records.** `name` is the declared name, or `null` for an anonymous record type. `args` are the
@@ -271,20 +270,21 @@ type Reflect.Opaque = { name: string }
   and so a builder, may leave the field out, and `Reflect.default` gives the default itself.
 - **Named primitives.** `Id[User]` and `Id[Account]` share a tag (section 4) but are different type
   values, because their `args` differ.
-- **Declarations.** `decl` is the declaration a named record or named primitive comes from, `null`
-  for an anonymous record. Two are `==` when they are the same declaration, whatever the type
-  arguments, so `Box[int]` and `Box[string]` share one. A `Reflect.Decl` hashes, renders as the
-  declared name, and does nothing else. It is the key for anything that applies to every
+- **Declarations.** `decl` is the declaration a named record, named primitive, or opaque type comes
+  from, `null` for an anonymous record. Two are `==` when they are the same declaration, whatever
+  the type arguments, so `Box[int]` and `Box[string]` share one. A `Reflect.Decl` hashes, renders as
+  the declared name, and does nothing else. It is the key for anything that applies to every
   instantiation of a generic type, such as a codec table entry for all of `Box[T]` that reads the
-  arguments from `args`. `name` cannot be that key, because two modules may each declare a
-  `Config`.
+  arguments from `args`. `name` cannot be that key, because two modules may each declare a `Config`.
 - **Unions.** Members are flattened and deduplicated, aliases are expanded, and the members come in
   the order they were written. `T | null` is a union with a `Reflect.Null` member, and
   `Result[int, Error]` is a union of the records `Ok[int]` and `Err[Error]`.
 - **Opaque.** Everything whose values reflection does not take apart: `Bytes`, `Html`,
   `Regex.Pattern`, the time types, the sync, random, and resource types, the opaque types of a
-  declaration file, `Reflect.Type[T]`, `Reflect.ErasedType`, `Reflect.Decl`, and `Reflect.Value`. `name` renders the
-  type. A format tests for a type it handles by comparing type values,
+  declaration file, `Reflect.Type[T]`, `Reflect.ErasedType`, `Reflect.Decl`, and `Reflect.Value`.
+  `name` renders the type. Every opaque type is declared, in `prelude.d.ant` or another declaration
+  file, so `decl` is always set, and `args` are its type arguments. A codec keyed by `decl` covers
+  every `Channel[T]`. A format tests for a type it handles by comparing type values,
   `t == Reflect.erase(type(Bytes))`, rather than by name.
 - **One level.** Children are `Reflect.ErasedType` values, so a recursive type is a finite graph
   that a program walks as deep as it needs.
@@ -400,10 +400,10 @@ cost nothing per element. So a mistyped unchecked program fails where it uses a 
 at the box, as it does with a wrong annotation. `ant check` is what rules that out.
 
 **Values of the new kinds.** A `Reflect.Value` is `==` to another when the types are equal and the
-values are `==`, and it renders as `Reflect.Value(42: int)`. Type values and reflected values have
-no `is` discriminator. As with the sync rows of the table of Kinds, a union may hold at most one of
-`Reflect.Type[T]`, `Reflect.ErasedType`, and `Reflect.Value`. `Json.stringify` panics on either
-kind, as it already does on a type.
+values are `==`, and it renders as `Reflect.Value(42: int)`. Type values, declarations, and
+reflected values have no `is` discriminator. As with the sync rows of the table of Kinds, a union
+may hold at most one of `Reflect.Type[T]`, `Reflect.ErasedType`, `Reflect.Decl`, and
+`Reflect.Value`. `Json.stringify` panics on any of these kinds, as it already does on a type.
 
 ### Visibility
 
@@ -545,10 +545,11 @@ before it writes it.
   type name is an expression only as …" gains a pointer to type expressions, and its own rule
   stands.
 - **Section 4, Kinds.** New rows for `Reflect.Type[T]` and `Reflect.ErasedType` (kind type, no `is`,
-  `==` by type identity, rendered as the type, at most one per union with `Reflect.Value`) and for
-  `Reflect.Value` (kind reflected value, no `is`, `==` by type and value, rendered as
-  `Reflect.Value(v: T)`), and for `Reflect.Decl` (kind declaration, no `is`, `==` by declaration,
-  rendered as the declared name).
+  `==` by type identity, rendered as the type, at most one per union with `Reflect.Decl` and
+  `Reflect.Value`) and for `Reflect.Value` (kind reflected value, no `is`, `==` by type and value,
+  rendered as `Reflect.Value(v: T)`), and for `Reflect.Decl` (kind declaration, no `is`, `==` by
+  declaration, rendered as the declared name). The four share the rule that a union holds at most
+  one of them.
 - **Section 4, new subsection "Types as values".** Type expressions, closedness, equality, laziness,
   and `Reflect.ErasedType`.
 - **Section 5.** `type ( Type )` in the expression grammar, as a primary expression.
@@ -582,8 +583,8 @@ before it writes it.
 - **Declarations.** Each tag gets one `*types.Decl`, built the first time reflection reaches it and
   cached. The `Decl` is cached before its fields, alias body, or base are resolved, so a recursive
   type finds itself, as the checker's `resolveTypeOnce` does. A generic declaration keeps its
-  `types.ParamDecl`s, and a shape substitutes the arguments with `types.Subst`. A `Reflect.Decl`
-  is a value holding that `*types.Decl`, compared and hashed by pointer.
+  `types.ParamDecl`s, and a shape substitutes the arguments with `types.Subst`. A `Reflect.Decl` is
+  a value holding that `*types.Decl`, compared and hashed by pointer.
 - **Resolver** (`ant/internal/interp`). A runtime resolver turns type syntax into a `types.Type`.
   The table of built-in names (primitives, `null`, `void`, `never`, `Array`, `Map`, `Set`) moves
   into `types` and is shared with the checker. The structural walk mirrors the checker's
@@ -603,21 +604,23 @@ before it writes it.
   parameters, and declare the `Reflect` namespace in `ant/internal/prelude/prelude.d.ant` with doc
   comments.
 - **Library** (`ant/internal/lib`). The functions above, in a new `reflect.go`, and the type value
-  implementation over `types.Type`.
+  implementation over `types.Type`. The type builders wrap the token's type: `arrayOf`, `setOf`, and
+  `mapOf` build `types.Array`, `types.Set`, and `types.Map`, and `nullable` calls `types.MakeUnion`
+  with `types.Null`.
 - **JavaScript backend.** Type values as plain frozen objects with the same relations. Nothing
   depends on the host's reflection.
 - **Tests.** Every shape, including recursive records, recursive aliases (`Json.Value`), local
   types, generic records and named primitives with arguments, and prelude types, with every
   Go-created prelude tag matched to its declaration. Each type builder against the type expression
-  it stands for, including `Reflect.nullable` of a type that already holds `null`. Union resolution for each discriminator kind,
-  including the anonymous member and a sync member. Every builder contract panic. Defaults filled by
-  `makeRecord` with fresh evaluation per call, and the same for `Reflect.default`, including a
-  default that reads a variable, a default of a generic record at two type arguments, a default of a
-  local type, and each of its panics. The soundness cases: an empty `Array[int]` boxed and unboxed
-  as `Array[string]` panics, `Array[Circle]` is refused for an `Array[Shape]` slot, and a `Person`
-  is accepted for a `{ name: string }` slot and read back through it with only `name`. An unchecked
-  run with a wrong `Reflect.valueOf` panics on kind. The JSON sketch above, run as a round-trip
-  property test over generated values of generated types.
+  it stands for, including `Reflect.nullable` of a type that already holds `null`. Union resolution
+  for each discriminator kind, including the anonymous member and a sync member. Every builder
+  contract panic. Defaults filled by `makeRecord` with fresh evaluation per call, and the same for
+  `Reflect.default`, including a default that reads a variable, a default of a generic record at two
+  type arguments, a default of a local type, and each of its panics. The soundness cases: an empty
+  `Array[int]` boxed and unboxed as `Array[string]` panics, `Array[Circle]` is refused for an
+  `Array[Shape]` slot, and a `Person` is accepted for a `{ name: string }` slot and read back
+  through it with only `name`. An unchecked run with a wrong `Reflect.valueOf` panics on kind. The
+  JSON sketch above, run as a round-trip property test over generated values of generated types.
 - **Benchmarks.** Before merging, measure the sketch against hand-written decoders on a 1 MB
   configuration and a 10 MB array of records. Expect several times slower: one box per node, plus
   the `Json.Value` tree in between. If the follow-up needs speed, `Json.decode` can be native with
@@ -683,8 +686,8 @@ before it writes it.
   generic call, as C# and Go do, so `type(T)` would work inside a generic function. Then what a
   program does would depend on what the checker infers: inference would become a runtime rule
   (section 4, Checking and running), a program with a type error could not run, and every backend
-  would carry the checker. Reflection alone does not pay for that. Dispatch by type with no value
-  in hand, such as `T.zero()` (`interfaces.md`, Non-goals), would need the same machinery, so the
+  would carry the checker. Reflection alone does not pay for that. Dispatch by type with no value in
+  hand, such as `T.zero()` (`interfaces.md`, Non-goals), would need the same machinery, so the
   question belongs to that proposal and is decided once for the language.
 - **Hooks found by name**, `Reflect.function(t, "fromJson")`, as Go's `MarshalJSON`. The functions
   declared on a type are fields of its tag (section 6), so reflection could look one up. But a
