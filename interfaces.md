@@ -137,7 +137,7 @@ At run time a call whose callee is `x.f`:
 | a string, `Bytes`, `Html`, an array, a map, a set             | `String`, `Bytes`, `Html`, `Array`, `Map`, `Set`                                                                                               |
 | `Ok`, `Err`                                                   | `Result`                                                                                                                                       |
 | a value of a prelude type `N`, or of a type `N.T` it declares | `N`: `Mutex`, `Channel`, `Error`, …; `File` for `File.Handle`, `Time` for `Time.Instant`, `Regex` for `Regex.Pattern`, `Cmd` for `Cmd.Process` |
-| a number, `bool`, `null`, `void`, a function                  | none (open questions 6 and 7)                                                                                                                  |
+| a number, `bool`, `null`, `void`, a function                  | none (Decisions 4; open question 3)                                                                                                            |
 
 That is the whole run-time rule. Only the call form changes: `x.f` outside a call is a field read,
 as today, so a namespace function is reached only by calling it. `var g = p.norm` is a compile error
@@ -275,9 +275,10 @@ The spec gets one paragraph of guidance:
 
 - A closed set of variants is a union, narrowed with `is` and checked for exhaustion.
 - An open set is an interface, called with `.`.
-- A function from the receiver's own namespace is called with `.`: `xs.map(f)`, `p.norm()`. Any
-  other function, a module's or another namespace's, is called plainly or through `|`:
-  `seq | Iter.take(5)`, `v | Json.stringify()`, `n | Port`.
+- A function from the receiver's own namespace may be called with `.`, `xs.map(f)`, or through the
+  namespace, `xs | Array.map(f)` and `Array.map(xs, f)`. All three are legal and none is preferred;
+  `ant fmt` keeps the one the author wrote. Any other function, a module's or another namespace's,
+  is called plainly or through `|`: `seq | Iter.take(5)`, `v | Json.stringify()`, `n | Port`.
 - State captured at construction, such as a handler and its configuration, stays a record of
   closures.
 
@@ -394,8 +395,8 @@ var port = (m.get("port") ?? "80").trim()
   field whose name their namespace uses for a function on them. The check runs over the prelude's
   declaration file, so a new clash fails the build.
 - **Tools:** `ant fmt`, `ant doc`, LSP completion and implementations, the editor grammars
-  (vscode-ant, nvim-ant, intellij-ant, the Monaco package), the site and its examples. A rewrite
-  from `x | N.f(…)` to `x.f(…)` needs types, so it is an LSP code action, not `ant fmt`.
+  (vscode-ant, nvim-ant, intellij-ant, the Monaco package), the site and its examples. `ant fmt`
+  formats both call forms and never converts one into the other.
 
 ## Alternatives
 
@@ -443,25 +444,30 @@ three things: a field, a namespace function bound to `x`, or an error. Ant keeps
 - **Generic interface functions.** The interpreter would need nothing, since a call ignores type
   arguments; only the checker's satisfaction rule grows.
 
+## Decisions
+
+Review on 2026-11-04 settled four questions.
+
+1. **No fields in interfaces.** An interface lists functions only. A structural shape over fields
+   stays an anonymous record type or bound, `[T: { name: string }]`, and stays unnamed.
+2. **Both call spellings stay.** `xs.map(f)`, `xs | Array.map(f)` and `Array.map(xs, f)` are all
+   legal, with no warning and no preferred form. `ant fmt` keeps the spelling the author wrote. The
+   cost is two ways to write one call; the gain is that every existing program, pipeline and example
+   stays valid and nothing has to be migrated.
+3. **Satisfaction is implicit, as in Go.** A type that has the functions satisfies the interface,
+   whether or not its author had the interface in mind. Signatures are checked, which makes a wrong
+   match unlikely. Prelude interfaces that replace `typed-data.md`'s hooks (see Later) follow the
+   same rule when they come.
+4. **Numbers have no namespace.** `x.abs()` is a compile error and a panic; `Math.abs(x)` and
+   `x | Math.abs()` stay the spellings. `Math` mixes functions on every number, on `float64` only,
+   and on none (`Math.random()`), and `Bits` would be left out, so no kind maps to it.
+
 ## Open questions
 
-1. **Fields in interfaces.** `interface Named { name: string }` would give a structural shape a
-   name, which today is impossible. It mixes a structural field rule with a function rule in one
-   declaration.
-2. **Bound or type for `Self`-receiver interfaces.** `func total(xs: Array[Shape])` and
+1. **Bound or type for `Self`-receiver interfaces.** `func total(xs: Array[Shape])` and
    `func total[T: Shape](xs: Array[T])` overlap. The rule here follows Go: take the interface type,
    and use a bound when the result must keep `T`.
-3. **Two spellings for one call.** `xs.map(f)` and `xs | Array.map(f)` call the same function. The
-   guidance picks `.`; `ant fmt` cannot enforce it without types, but the checker could warn and the
-   LSP offer the rewrite. The stricter choice is a compile error for a pipe or a plain call into the
-   receiver's own namespace, which makes `.` the only spelling.
-4. **Accidental satisfaction.** A type with a `close` of the right shape satisfies every `Closer`.
-   Go accepts this; `typed-data.md` rejected hooks that a function could become by accident. The two
-   proposals should agree.
-5. **`Self`.** A reserved word, or a type name only inside interface bodies.
-6. **Numbers.** No namespace today. Mapping every numeric kind to `Math` would give `x.abs()` and
-   `x.sqrt()`, but `Math` also holds `Math.random()` and functions on `float64` only, and `Bits`
-   would be left out. The alternative is nothing, and `Math.abs(x)` as now.
-7. **Sequences.** A `Seq[T]` is a function, so `seq.filter(f)` would mean every function value
+2. **`Self`.** A reserved word, or a type name only inside interface bodies.
+3. **Sequences.** A `Seq[T]` is a function, so `seq.filter(f)` would mean every function value
    searches `Iter`. Useful for pipelines, odd for every other function. The alternative is
    `seq | Iter.filter(f)` as now.
