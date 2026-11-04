@@ -150,7 +150,8 @@ a == type(int64)                          // true: int is an alias of int64
   where with the value first `42` would fix `T` as `int` and `[]` would have no element type.
 - **Closed types only.** `T` may not mention a type parameter of an enclosing function or type
   (including a default in a generic record), since the runtime has nothing bound to that name. This
-  is a compile error that says to take a `Reflect.Type[T]` parameter instead. A generic type needs
+  is a compile error that says to take a `Reflect.Type[T]` parameter instead, and to build larger
+  types from it with the builders below (Building type values). A generic type needs
   its arguments, as in an annotation, so `type(Box)` is a compile error and `type(Box[int])` is
   fine.
 - **A type name alone is still not a value.** Section 4's rule stands: `Config` in expression
@@ -176,6 +177,33 @@ conversion from `Reflect.Type[T]`. The conversion is always written: `Reflect.Ty
 assignable to `Reflect.ErasedType` (see Alternatives). Format code recurses on erased types, since
 the element type of an `Array[E]` is not known statically one level down. The typed form is needed
 at the two ends only: the caller's `type(T)` and the final `Reflect.to`.
+
+### Building type values
+
+Closedness means a generic function holds `Reflect.Type[T]` but cannot write `type(Array[T])`. Four
+builders compose a token from smaller ones and keep the static type:
+
+```
+Reflect.arrayOf[T](t: Reflect.Type[T]): Reflect.Type[Array[T]]
+Reflect.setOf[T](t: Reflect.Type[T]): Reflect.Type[Set[T]]
+Reflect.mapOf[K, V](k: Reflect.Type[K], v: Reflect.Type[V]): Reflect.Type[Map[K, V]]
+Reflect.nullable[T](t: Reflect.Type[T]): Reflect.Type[T | null]
+```
+
+Each result is `==` to the type expression it stands for: `Reflect.arrayOf(type(int)) ==
+type(Array[int])`, and `Reflect.nullable(type(int | null)) == type(int | null)`, since unions
+flatten.
+
+```ant
+func decodeAll[T](text: string, t: Reflect.Type[T]): Result[Array[T], Error] {
+  decode(text, Reflect.arrayOf(t))
+}
+```
+
+There is no builder for a user's generic type. `Reflect.apply(type(Box), t)` would need `Box` as a
+type constructor, which `type(Box)` is not, and its signature would need higher-kinded types that
+section 4 does not have. A function generic over `Box[T]` takes `Reflect.Type[Box[T]]` from its
+caller, who writes `type(Box[Config])`.
 
 ### What the interpreter keeps
 
@@ -570,7 +598,8 @@ before it writes it.
   depends on the host's reflection.
 - **Tests.** Every shape, including recursive records, recursive aliases (`Json.Value`), local
   types, generic records and named primitives with arguments, and prelude types, with every
-  Go-created prelude tag matched to its declaration. Union resolution for each discriminator kind,
+  Go-created prelude tag matched to its declaration. Each type builder against the type expression
+  it stands for, including `Reflect.nullable` of a type that already holds `null`. Union resolution for each discriminator kind,
   including the anonymous member and a sync member. Every builder contract panic. Defaults filled by
   `makeRecord` with fresh evaluation per call, and the same for `Reflect.default`, including a
   default that reads a variable, a default of a generic record at two type arguments, a default of a
@@ -595,7 +624,8 @@ before it writes it.
   `[]` gets its element type only from inference, which `ant run` never does. The type always comes
   from the program's text.
 - **No making types at run time.** Unlike Zig's `@Type`, a program cannot create a record type that
-  no declaration wrote.
+  no declaration wrote. The builders only combine existing types with `Array`, `Set`, `Map`, and
+  `| null`, which a type expression could also write.
 - **No field metadata.** There are no struct tags or attributes for renaming fields. A format offers
   naming policies as options. Per-field renames and other field metadata wait for a later proposal
   on annotations, which will add the syntax and its reflection together.
@@ -633,6 +663,19 @@ before it writes it.
 - **A prelude function, `typeof(T)`.** The call would have to parse a type as its argument, which no
   other call does, and the name suggests the type of a value. A keyword form makes the exception
   visible.
+- **Implicit tokens**, as Rust's trait bounds, Haskell's type classes, and Kotlin's `reified` give.
+  These hide the token without removing it: `fn load<T: DeserializeOwned>` repeats its bound in
+  every generic caller, a Haskell compiler passes a dictionary per constraint, and Kotlin's
+  non-inline generic code passes a `KSerializer<T>` by hand. Hiding it needs the checker to insert
+  the argument, and `ant run` does no static work. Explicit tokens pass in the same places, are
+  visible, and work in unchecked programs.
+- **Types kept at run time.** `ant run` could run the checker and pass type arguments to every
+  generic call, as C# and Go do, so `type(T)` would work inside a generic function. Then what a
+  program does would depend on what the checker infers: inference would become a runtime rule
+  (section 4, Checking and running), a program with a type error could not run, and every backend
+  would carry the checker. Reflection alone does not pay for that. Dispatch by type with no value
+  in hand, such as `T.zero()` (`interfaces.md`, Non-goals), would need the same machinery, so the
+  question belongs to that proposal and is decided once for the language.
 - **Explicit type arguments at call sites**, `Json.decode[Config](text)`. Section 4 forbids them,
   `[` after a name already means indexing, and under erasure the argument would still have to be
   passed as a value. That would be this proposal with a second syntax.

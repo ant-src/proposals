@@ -420,7 +420,11 @@ three things: a field, a namespace function bound to `x`, or an error. Ant keeps
 ## Non-goals
 
 - **Method values**, for the reason above.
-- **Dispatch by result type** (`T.zero()`, `T.parse(s)`). It needs types at run time.
+- **Dispatch by result type** (`T.zero()`, `T.parse(s)`). It needs types at run time: `ant run`
+  would have to run the checker and pass type arguments to generic calls, so inference would decide
+  what a program does. `reflection.md` declined the same machinery for `type(T)` inside generic
+  functions and deferred the question here. If dispatch by result type is ever wanted, it is decided
+  once for both, together with `Array.sum([])` returning the zero of the element type.
 - **Default implementations, explicit `implements`, embedding with `...`, generic interface
   functions.** Each adds rules for a convenience. Embedding and generic functions are in Later.
 - **`is` with an interface**, for the reason in Interfaces.
