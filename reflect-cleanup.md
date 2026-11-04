@@ -22,8 +22,14 @@ values, and section 11, Reflect), each found while implementing it or writing it
    two replaces the name matching that fixed it.
 5. **One discriminator.** The runtime resolves a union to a member with the checker's own
    discriminator keys, instead of a second table of kinds and tags written for values.
+6. **`Reflect.default` goes.** It evaluates a field default, effects included, each time it is
+   called, and its one use, an encoder that leaves out fields equal to their defaults, is wrong
+   whenever a default is not a literal. Decoding never needs it: `Reflect.Field.hasDefault` says a
+   field may be left out and `Reflect.makeRecord` fills it. Omitting fields on encode is format
+   policy and moves to `typed-data.md`.
 
-A program sees two renames and one dropped field. Everything else is text and implementation.
+A program sees two renames, one dropped field, and one dropped function. Everything else is text and
+implementation.
 
 ## Motivation
 
@@ -46,6 +52,17 @@ A program sees two renames and one dropped field. Everything else is text and im
   `types.Discriminator`, as the checker already matches `Time.` and `Regex.Pattern` when it declares
   them. The runtime has the same special case: `types.Decl.Tag` holds either the tag of a declared
   type or, for these two, a kind.
+- `Reflect.default(t, name)` runs the default of one field afresh, as a literal would. With
+  `type Job = { name: string, id: int = next() }`, two calls return 1 and 2 and advance the counter,
+  so `Reflect.field(d, "id") == Reflect.default(t, "id")` is false for a job whose `id` is 7, and an
+  encoder written as section 11 suggests runs every default of every record it writes, effects
+  included; a default that reads a top-level `var` before its initializer ran, or one that builds
+  its own type, panics inside the encoder. The review of the original proposal made the same point
+  about the "`omitempty` in spirit" advice and asked for it to be removed. Without that use the
+  function has no caller: a decoder leaves a field out when `hasDefault` is set and
+  `Reflect.makeRecord` evaluates the default where a literal would. Go's `omitempty` is zero-value
+  based and serde's `skip_serializing_if` is a predicate the caller writes; neither evaluates a
+  declared default.
 - The runtime's `Reflect.valueOf` resolves a union by its own list: a kind per primitive, a tag per
   record or tagged primitive, the time type's name, a sync object's name compared as a string, and
   the four Reflect types by their tags. The checker decides which unions are legal with
@@ -129,30 +146,60 @@ primitive, time value, or pattern by its tag's declaration. A value with no key,
 value of one of the four Reflect types, goes to the one member that has none, which the union rules
 allow at most once. The runtime then consults the same rule that admitted the union.
 
+### Dropping `Reflect.default`
+
+`Reflect.default` leaves the listing, with its three panic cases, and the paragraph that defines it
+and the sentence that recommends comparing fields with their defaults leave section 11. A field
+default is evaluated in two places only, as before this section existed: a record literal and
+`Reflect.makeRecord`, which fills an omitted field "as a literal evaluates it". An encoder that
+wants to leave fields out takes a predicate from its caller, as serde's `skip_serializing_if` does,
+which is the policy `typed-data.md` decides; its "omitting defaults on encode" option, which it
+built on `Reflect.default`, becomes that predicate or goes.
+
+```ant
+type Job = { name: string, id: int = next(), tags: Array[string] = [] }
+
+var s = Reflect.shape(Reflect.erase(type(Job)))
+if s is Reflect.Record {
+  for f in s.fields { println("${f.name} may be left out: ${f.hasDefault}") }
+}
+var made = Reflect.makeRecord(Reflect.erase(type(Job)), Map{ name: Reflect.valueOf(type(string), "x") })
+// name may be left out: false, id: true, tags: true; made has a fresh id and a new tags array
+```
+
 ## Spec changes
 
-- **Section 11, Reflect.** The listing: the three shapes above and `Reflect.Tagged` in
-  `Reflect.Shape`. The bullets "Records", "Named primitives", and "Opaque": no `name`; the declared
-  name is the `decl` rendered, the type is the type value rendered. The invariant's reader bullet:
-  the anonymous-member sentence above. The example that narrows with `s is Reflect.Named` uses
-  `Reflect.Tagged`.
+- **Section 11, Reflect.** The listing: the three shapes above, `Reflect.Tagged` in `Reflect.Shape`,
+  and no `Reflect.default`. The bullets "Records", "Named primitives", and "Opaque": no `name`; the
+  declared name is the `decl` rendered, the type is the type value rendered. The paragraph on
+  `Reflect.default` and the omit-defaults sentence go; the "Records" bullet keeps "`hasDefault` says
+  whether a literal, and so `Reflect.makeRecord`, may leave the field out". The invariant's reader
+  bullet: the anonymous-member sentence above. The example that narrows with `s is Reflect.Named`
+  uses `Reflect.Tagged`.
 - **Section 10, Declaration files.** The bodiless-type bullet gains the prelude's exception and a
   pointer to the table of Kinds.
 - **Section 4** and **section 12** change nothing: the kinds, the union rules, and the panics stay.
 
 ## Implementation
 
-- `prelude.d.ant`: the three types, `Reflect.Tagged`, and their docs; `TestPreludeTypesMatchLibrary`
-  keeps the tags in step.
+- `prelude.d.ant`: the three types, `Reflect.Tagged`, and their docs; `Reflect.default` and its doc
+  go; `TestPreludeTypesMatchLibrary` keeps the tags in step.
+- `internal/interp`: `FieldDefault`, exported for `Reflect.default` alone, goes back to being the
+  private helper `fillDefaults` calls; `FillDefaults` and `HasDefault` stay for
+  `Reflect.makeRecord`.
 - `internal/lib/reflect.go`: the tags and `shape`, which drop the name values; union resolution by
   discriminator keys, which needs the declaration a tag was given, read without building it, since a
   tag never reached by a type expression cannot name a member.
 - `internal/types`: a declaration kind for `Bytes` and `Html`, set where `resolveTypeDecl` sets the
   time types' kind, with the kind in `Decl.Base`; `Discriminator` reads it; `Decl.Tag` typed as
   `*value.Tag`. The runtime's `builtinDecl` builds the same kind.
-- Tests: `tests/stdlib/reflect.ant` renderings, `tests/run/lib/typed.ant` (`s.decl == null`), the
-  run programs, and a `tests/check` case that `Bytes | Mutex` and `Bytes | Html` are unions.
-- `proposals/typed-data.md` mentions `Reflect.Opaque` only, which keeps its name.
+- Tests: `tests/stdlib/reflect.ant` renderings and its `Reflect.default` block, which goes;
+  `tests/run/reflect_defaults.ant`, which keeps the `makeRecord` cases (fresh evaluation, a generic
+  record at two type arguments, a local type) and loses the `Reflect.default` ones;
+  `tests/run/lib/typed.ant` (`s.decl == null`); a `tests/check` case that `Bytes | Mutex` and
+  `Bytes | Html` are unions.
+- `proposals/typed-data.md`: the "omitting defaults on encode" option becomes a caller predicate or
+  goes; `Reflect.Opaque` keeps its name.
 
 ## Not changed
 
