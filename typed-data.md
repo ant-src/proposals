@@ -514,8 +514,9 @@ removed.
 - **Every error at once**, as pydantic reports, as one message with a line per error.
 - **Non-string map keys and time values in `Type.Data`**, for MessagePack and CBOR keys and for TOML
   and YAML dates.
-- **Omitting defaults on encode**, `omitempty` in spirit, which the Reflect section's
-  `Reflect.default` makes possible.
+- **Omitting fields on encode**, `omitempty` in spirit, as a predicate the caller gives, in the
+  manner of serde's `skip_serializing_if`. A declared default is not a zero value, and the Reflect
+  section evaluates one only where a literal would, so nothing compares a field with its default.
 
 ## Open questions
 
