@@ -1,6 +1,6 @@
 # Proposal: reflection
 
-2026-11-03 · Anton
+2026-11-03 · Anton · Accepted 2026-11-04
 
 ## Summary
 
