@@ -10,8 +10,8 @@ such as `type Nest[T] = Array[Nest[T]] | Box[T]`, becomes a compile error; gener
 through a record's field, as `type List[T] = { value: T, next: List[T] | null }` already does.
 
 The rule removes what reflection made the checker and the interpreter carry for recursion through
-generic aliases: the substituter's guards against meeting its own instantiation, the self-args rule
-for aliases, and the per-call cycle search in `Equal`. Comparison of recursive aliases stays
+generic aliases: the substituter's guard for a union body formed inside its own alias, the self-args
+rule for aliases, and the per-call cycle search in `Equal`. Comparison of recursive aliases stays
 coinductive, as the spec says today. The cost is one wrapper record where a generic recursive alias
 was used; no `.ant` file outside the type checker's tests has one.
 
@@ -34,8 +34,9 @@ Code growth since the commit before reflection (e38defa to ae9a04f, non-test Go 
 The Reflect library itself (`internal/lib/reflect.go`, 520 lines) is the simple part. Much of the
 growth in `internal/types` exists because a generic alias can lead back to itself:
 
-- **A substituter that stops on its own instantiations** (`seen`, `done`, `plain`, `outer` in
-  `subst.go`), since substituting a recursive generic alias's body meets the alias again.
+- **A substituter that stops on its own instantiations** (`outer`, `plain` and `raw` in `subst.go`),
+  since substituting a recursive generic alias's body meets the alias again. Its `seen` and `done`
+  serve generic records too, whose fields it validates when it instantiates them, and stay.
 - **The self-args rule for aliases** (`SelfArgs`) and the per-component searches that keep it,
   `AliasCycle` and `UnionSelf` linear (`scc.go`, the `In` variants in `selfargs.go`).
 - **A cycle search per `Equal` call** (`findRecursive` in `memo.go`) to tell which generic aliases
@@ -79,9 +80,9 @@ spent most of its recent fixes.
 ### Terms
 
 Draw a graph over a module's type declarations, with an edge from an alias to every declaration its
-body names, type arguments included, and from a named record type to every declaration its type
-arguments name. A record's fields add no edge. An alias is **recursive** when it lies on a cycle of
-this graph.
+body names, type arguments included, and from a generic alias to every declaration a parameter's
+bound names. A record's fields add no edge. An alias is **recursive** when it lies on a cycle of this
+graph.
 
 `Json.Value` is recursive. `type Tree[T] = Leaf[T] | Node[T]` with
 `type Node[T] = { kids: Array[Tree[T]] }` is not: its only path back to `Tree` runs through `Node`'s
@@ -139,7 +140,7 @@ numbers.
 | Part                                                      | Today                                              | After                                                    |
 | --------------------------------------------------------- | -------------------------------------------------- | -------------------------------------------------------- |
 | Which aliases `Equal` remembers (`findRecursive`)         | A cycle search per call                            | Aliases without arguments; a generic one cannot recur    |
-| Substitution (`subst.go`)                                 | `seen`, `done`, `plain`, `outer` to stop on itself | Terminates structurally; records' fields never expand    |
+| Substitution (`subst.go`)                                 | `outer`, `plain`, `raw` to stop on itself          | `outer` gone; `plain` and `raw` with the union row       |
 | Union building inside `Equal` (`union.go`)                | Raw unions plus validated ones, came-back checks   | One way to build a union, if the prototype confirms it   |
 | `SelfArgs` and its per-component search                   | Generic aliases and records                        | Records only                                             |
 | `checkDecl` in `rtype.go`, the checker's declaration pass | The rules above for generic aliases too            | The generic-alias cases gone, one new check for the rule |
