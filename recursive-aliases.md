@@ -134,16 +134,23 @@ about records only, since only a record's fields can now lead a generic type bac
 
 ## What gets simpler
 
-These are estimates from reading the code. A prototype (see Validation) would replace them with
-numbers.
+Measured on the prototype, branch `recursive-aliases` of ant (dfffe8a, six commits on master
+5c9fa9f; see Validation):
 
-| Part                                                      | Today                                              | After                                                    |
-| --------------------------------------------------------- | -------------------------------------------------- | -------------------------------------------------------- |
-| Which aliases `Equal` remembers (`findRecursive`)         | A cycle search per call                            | Aliases without arguments; a generic one cannot recur    |
-| Substitution (`subst.go`)                                 | `outer`, `plain`, `raw` to stop on itself          | `outer` gone; `plain` and `raw` with the union row       |
-| Union building inside `Equal` (`union.go`)                | Raw unions plus validated ones, came-back checks   | One way to build a union, if the prototype confirms it   |
-| `SelfArgs` and its per-component search                   | Generic aliases and records                        | Records only                                             |
-| `checkDecl` in `rtype.go`, the checker's declaration pass | The rules above for generic aliases too            | The generic-alias cases gone, one new check for the rule |
+| Part                                                      | Before                                            | After                                                                         |
+| --------------------------------------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Which aliases `Equal` remembers (`findRecursive`)         | A cycle search per call                           | Aliases without arguments; the search is gone                                 |
+| Substitution (`subst.go`)                                 | `outer`, `plain`, `raw` to stop on itself         | `outer` and `raw` gone; `plain` stays for expansion without validation        |
+| Union building inside `Equal` (`union.go`)                | Raw unions plus validated ones, came-back checks  | One way to build a union: `Equal` expands as `Assignable` always did          |
+| `SelfArgs` and its per-component search                   | Generic aliases and records                       | Records only; the search still follows aliases, since a record recurs through them |
+| `checkDecl` in `rtype.go`, the checker's declaration pass | The rules above for generic aliases too           | One new check, `GenericRecursive`, in both                                    |
+
+The rule's own implementation, `generic.go` with the cycle search, the blame and the cycle the
+message lists, is 97 lines, as long as what it removed: non-test Go lines go from 2,361 to 2,356 in
+`internal/types`, from 5,559 to 5,563 in `internal/interp` and from 5,840 to 5,855 in
+`internal/check`. The gain is not in lines but in what the remaining code has to handle: no
+substitution meets its own instantiation, `Equal` expands to the same unions as everything else,
+and the comparison memo needs no graph search.
 
 ## Spec changes
 
@@ -224,3 +231,28 @@ Before acceptance, prototype on a branch of `ant`:
    - `type Opt[T] = T | null` with `type Doc = Opt[Array[Doc]]`, which stays legal.
 4. Re-run the reproducers in `private/type-bugs/repro/` and the long-chain tests, and check that no
    timing gets worse.
+
+### Prototype results (2026-11-07)
+
+Branch `recursive-aliases` of ant, worktree `ant-ra/`, six commits on master 5c9fa9f ending at
+dfffe8a. `go test ./...` passes.
+
+1. The rule is `types.GenericRecursive`, run by the checker after the alias-cycle check and by
+   `checkDecl` at run time. The graph follows bodies as written, a union's members before it was
+   formed included, so the checker and the runtime blame the same alias; the components the
+   other declaration checks share now include bound edges.
+2. Removed as the table above says. Five checker tests, two run tests and five unchecked tests
+   that used generic recursive aliases now use records or plain aliases; two unit tests of the
+   removed guards became one of the rule. New: `tests/check/alias_generic_recursive.ant`,
+   `tests/run/alias_recursive_plain.ant` and `tests/unchecked/type_expr_generic_recursive.ant`.
+3. Every `.ant` file in ant, spec, the site, ant-web, proposals and the reproducers, under
+   `ant check` and, where the corpus runs it, `ant run`: 838 invocations, 827 identical to master.
+   The 11 that differ are the rewritten tests and reproducer 10. None is slower. 3,000 generated
+   programs of random type declarations, each checked and run under both binaries: 5,704 of 6,000
+   outputs identical; 283 differ only by the new error, 23 of them programs master accepted,
+   every one a generic alias on a cycle, several with a phantom parameter; 13 differ because the
+   self-args error is now reported at the record alone where master also reported the alias, and
+   the branch still rejects each. No crash, hang or timeout on either side. The four programs
+   listed above keep their results, as `alias_recursive_plain.ant` and
+   `assignability_recursive_aliases.ant` show.
+4. Every reproducer finishes within 0.3 s under both binaries; the long-chain tests take 0.24 s.
