@@ -129,7 +129,9 @@ At run time a call whose callee is `x.f`:
    evaluates the arguments and calls the field's value with them, as today;
 3. otherwise finds the value's namespace in the table below, reads `f` from it, evaluates the
    arguments, and calls `f` with `x` first. A value with no namespace, or a namespace without `f`,
-   panics: `int has no field or function abs`, `Point has no field or function nrom`.
+   panics: `int has no field or function abs`, `Point has no field or function nrom`. A tag or a
+   module record holds its functions as fields, so a miss on one keeps today's message,
+   `Point has no function nrom`.
 
 | Value                                                         | Namespace                                                                                                                                      |
 | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -154,14 +156,15 @@ which takes a path, and panics there as any wrong call does.
 
 The checker resolves `x.f(…)` by the static type of `x`, fields first:
 
-| Type of `x`                          | `f` is                                                                                        |
-| ------------------------------------ | --------------------------------------------------------------------------------------------- |
-| a type with a field `f`              | the field, called as today                                                                    |
-| a type with a namespace in the table | the function `f` of that namespace, if it is visible here and its first parameter accepts `x` |
-| a union whose every member has one   | `f` for every member; each must accept the arguments, and the result is the union of results  |
-| an interface                         | the interface's `f`, with `Self` as the interface                                             |
-| a type parameter                     | as for its bound                                                                              |
-| anything else                        | a compile error: numbers, `bool`, anonymous record types without the field                    |
+| Type of `x`                                   | `f` is                                                                                                                                 |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| a type with a field `f`                       | the field, called as today                                                                                                             |
+| a type with a namespace in the table          | the function `f` of that namespace, if it is visible here and its first parameter accepts `x`; the call is then checked as `N.f(x, …)` |
+| a union whose members share a namespace       | the function `f` of that namespace, checked as `N.f(x, …)` with the union as the receiver                                              |
+| any other union whose every member has an `f` | `f` for every member, field or function; each must accept the arguments, and the result is the union of results                        |
+| an interface                                  | the interface's `f`, with `Self` as the interface                                                                                      |
+| a type parameter                              | as for its bound                                                                                                                       |
+| anything else                                 | a compile error: numbers, `bool`, anonymous record types without the field                                                             |
 
 The checker and the interpreter agree because no value has both a field and a function of one name:
 section 6 forbids it for user types, and a field never satisfies an interface function (Interfaces,
@@ -169,10 +172,15 @@ below), so a value that reaches `x.f(…)` through an interface has the function
 Width subtyping cannot add the field behind the checker's back either: an anonymous record type has
 no namespace, so the checker accepts only a field call through it.
 
-The first-parameter condition makes the few namespaces that mix receivers safe: `File` holds
-functions on paths and on handles, and `h.writeLine(line)` resolves while `h.write(text)` is a
-compile error. A function with no parameters, such as `Point.origin()`, is never reached through a
-value.
+The call is checked as the direct call it stands for, `Array.sort(points)` for `points.sort()`, with
+the same inference and the same errors, bounds included. The first-parameter condition decides only
+whether `f` is offered on `x` at all, which makes the few namespaces that mix receivers safe: `File`
+holds functions on paths and on handles, and `h.writeLine(line)` resolves while `h.write(text)` is a
+compile error that says `File.write` takes a path. A function with no parameters, such as
+`Point.origin()`, is never reached through a value. The condition is loose on purpose: a generic
+first parameter accepts anything, so `s.from()` on a string is `String.from(s)` and `a.new()` on an
+`Atomic` is `Atomic.new(a)`. Both are correct calls nobody writes, and a rule that read the
+parameter's type for the namespace's name would be a second rule for a cosmetic gain (Decision 10).
 
 The same condition makes the function row safe. Every function value's namespace is `Iter`, and
 every function of `Iter` that takes a receiver takes a `Seq[T]`, so
@@ -182,24 +190,33 @@ eager; on a sequence it is `Iter.filter`, lazy. The receiver's type decides, as 
 iterator helpers and Rust. An unchecked call of an `Iter` function on a function that is not a
 sequence panics inside it, as any wrong call does.
 
-The union row is the field rule of section 4, Tagged unions, applied to functions: a union of types
-that each have `area` can call `s.area()` without an interface, and `Cmd | Cmd.Pipeline` calls into
-`Cmd` for both. Its result must be a valid union. A `Result` is a union of `Ok` and `Err`, both of
-which the table sends to `Result`, so `r.unwrapOr(0)` works.
+The union rows are the field rule of section 4, Tagged unions, applied to functions. A union whose
+members share a namespace is one call, checked as the direct call: a `Result` is a union of `Ok` and
+`Err`, both of which the table sends to `Result`, so `r.unwrapOr(0)` is `Result.unwrapOr(r, 0)`,
+which solves `E` from the union. Resolved per member it could not, since an `Ok[int]` alone fixes no
+`E`, and `Result.unwrapOr(ok, 0)` on an `Ok[int]` is a compile error today for that reason.
+`Cmd | Cmd.Pipeline` calls into `Cmd` the same way. Any other union resolves `f` per member, a field
+on one member and a function on another included, since each value does its own lookup at run time:
+a union of types that each have `area` can call `s.area()` without an interface. Its result must be
+a valid union. `.` never does more than the direct call it stands for, so a bound that rejects the
+union rejects the call: `[T: Time.Point]` takes a single member, so `t.add(d)` on a
+`Time.Instant | Time.PlainDate` fails as `Time.add(t, d)` does, and the value is narrowed first.
 
 A function a user declares on an alias, `func Shape.area` with `type Shape = Circle | Rect`, is not
 reached through a value. A `Shape` value carries `Circle`'s tag, and the interpreter looks there. It
-is still called as `Shape.area(s)`. Only the prelude routes a union's members to one namespace, for
-`Result`.
+is still called as `Shape.area(s)`. Section 6's own example is this case, and it keeps the line that
+`s.area()` does not reach it, since it is the first thing a reader tries. Only the prelude routes a
+union's members to one namespace, for `Result`.
 
 A named primitive value uses its own type's namespace, not its base's: `id.length()` on a `UserId`
 looks in `UserId`, as library functions take the base kinds today. `string(id).length()` unwraps
 first.
 
-Named arguments apply when the checker knows the one function called: the receiver's type is not a
-union, an interface or a type parameter, so `ch.receive(ctx: c)` works. Through those three the call
-is positional, since each implementation may name its parameters differently and the interpreter
-binds names against the function it finds.
+Named arguments apply when the checker knows the one function called: a field, or a namespace
+function found through a single type or a union whose members share a namespace, so
+`ch.receive(ctx: c)` and `r.unwrapOr(fallback: 0)` work. Through a union of several namespaces, an
+interface or a type parameter the call is positional, since each implementation may name its
+parameters differently and the interpreter binds names against the function it finds.
 
 `x?.f()` yields `null` when `x` is `null` and calls `f` otherwise, as `?.` already does for fields.
 A chain may break before `.` or `?.` under the existing continuation rule (section 2).
@@ -220,11 +237,15 @@ interface Container[T] {
 
 `interface` declares a name at the top level of a module, and `export interface` exports it. The
 body lists signatures, one per line, in the syntax of a function type with parameter names. The
-first parameter of each is the receiver, of type `Self`, the satisfying type. `Self` is a reserved
-word that is legal only in an interface's signatures; anywhere else, `var x: Self` or
+first parameter of each is the receiver and has the type `Self`, exactly, the satisfying type; a
+signature whose first parameter has another type is a syntax error. A parameter may not carry a
+default, and a function may not take type parameters of its own, though the interface may. Parameter
+names document the call, since a call through an interface is positional (Calls through `.`). `Self`
+is a reserved word that is legal only in an interface's signatures; anywhere else, `var x: Self` or
 `type Self = …`, it is a syntax error, so it never has a second meaning. The body has at least one
-function, so no interface is satisfied by everything and none is a top type. An interface may take
-type parameters; its functions may not take their own.
+function, so no interface is satisfied by everything and none is a top type. An alias may name an
+interface, `type Drawable = Shape`, and stands for it as any alias does, a bound only when the
+interface is.
 
 A type `S` satisfies `I` when, for each function `f` of `I`, `.f(…)` on an `S` resolves (the checker
 table above) to a namespace function, not a field, visible where the checker asks, whose type with
@@ -235,16 +256,40 @@ interface for each instantiation its functions cover: `func Box.show[T](b: Box[T
 `Bytes` are all `interface Sized { length(s: Self): int }`, and a `File.Handle` is a `Sink` below
 without a wrapper.
 
+Visibility is the checker's, at the place it asks: where a value is widened to the interface, a
+bound is solved, or one interface is assigned to another. A type whose `writeLine` is not exported
+is therefore a `Sink` inside its module and not outside it, as in Go. The interpreter checks no
+privacy, so the function is still called through the interface from any module the value reaches.
+
+Satisfaction is checked as assignability is (section 4): a pair under test counts as satisfied, so
+`interface Node { next(n: Self): Node | null }` holds for `func Tree.next(t: Tree): Tree | null`.
+Type arguments stay invariant inside it, which is the first thing a tree runs into: `Array[Tree]` is
+not an `Array[Node]`, so a `children` that returned the field as it is would not satisfy `Node`, and
+the copy widens, as section 4 has it for every container.
+
+```ant
+interface Node {
+  children(n: Self): Array[Node]
+}
+
+type Tree = { kids: Array[Tree] = [] }
+
+func Tree.children(t: Tree): Array[Node] { [...t.kids] }   // a Node; returning t.kids, an Array[Tree], would not be
+```
+
 **As a type.** An interface whose functions mention `Self` only as the receiver is a type. A value
 of a satisfying type is assignable to it, as is a union whose every member satisfies it, and so is a
 value of an interface that has all of its functions. Containers stay invariant: `Array[Circle]` is
 not an `Array[Shape]`, and `[...circles]` widens. An interface value is the value itself, with no
 box: `==`, `String.from` and `Json.stringify` see the value. `is` narrows it to a satisfying type,
-and the `else` branch keeps the interface, since the set of satisfying types is open:
+and the `else` branch keeps the interface, since the set of satisfying types is open. A generic
+target narrows to the one instantiation that satisfies the interface, and it is a compile error when
+the interface does not determine every type argument, as section 5 already rules for an anonymous
+record type: `s is Box` is an error on a `Shape` and gives a `Box[int]` on a `Container[int]`.
 
 ```ant
 var shapes: Array[Shape] = [Circle{ radius: 1.0 }, Rect{ width: 2.0, height: 3.0 }]
-var total = shapes.map({ x.area() }).sum()
+var total = shapes.map({ x.area() }).sum() ?? 0.0
 
 for s in shapes {
   if s is Circle { println(s.radius) }
@@ -284,6 +329,13 @@ compile errors. `is` cannot test an interface, because at run time it could test
 signatures. It has no discriminator, so a union holds it only beside `null` and `void`:
 `Shape | null` is fine, `Shape | Error` is not, and `Result[Shape, Error]` wraps the two instead. It
 is declared only at the top level, since only top-level types have functions.
+
+It is not data either. A type expression may not reach an interface, so `type(Shape)` and
+`type(Scene)` with `type Scene = { shapes: Array[Shape] }` are compile errors, and `Reflect` gains
+no shape for one. The interpreter discards the declaration, so in an unchecked run `Shape` is a name
+nothing binds and the same expressions panic under the rule section 12 already has for a name in
+`T`. An open set has no members a format could decode into: typed decoding targets a union, whose
+members it can name, never an interface.
 
 The interpreter keeps nothing of an interface. The declaration is parsed and discarded, like an
 annotation, and every dynamic call goes through `.`.
@@ -377,21 +429,30 @@ var port = (m.get("port") ?? "80").trim()
 - §2 Lexical structure: `interface` moves from reserved words to keywords; `Self` joins the reserved
   words, legal only in an interface's signatures. No new token, and the continuation rule already
   covers a leading `.`.
-- §4 Types: a subsection, Interfaces: declaration, satisfaction, type or bound, the union rule; a
-  row in the table of Kinds; Generics drops "There are no interfaces" and gains interface bounds;
-  Assignability gains the interface rules; Type declarations drops "interfaces" from "no classes,
-  interfaces, or prototypes"; the guidance paragraph above.
-- §5 Expressions: calls through `.`, its two tables, and `?.` on them. Pipes: "The pipe replaces
-  method chaining" becomes "`.` chains calls of a value's own namespace; the pipe chains calls of
-  any other function."
-- §6 Functions on types: "There is no method call … `p.distance(q)` reads a field of `p`, which does
-  not exist" becomes the call through `.`; functions on aliases are reached only through the alias's
-  name. The rule that a function may not share its name with a field gains a second reason.
-- §10 Declaration files: a host's declaration file names the namespace of each type it declares, and
-  a prelude or host type's fields may not shadow a function its namespace offers on it.
-- §11 Standard library: the prelude's rows of the namespace table; examples move from
-  `xs | Array.map(f)` to `xs.map(f)`.
-- §12 Dynamic semantics: the three steps of a call through `.` and its panic.
+- §4 Types: a subsection, Interfaces: declaration, satisfaction and where it is asked, type or
+  bound, the union rule, narrowing; a row in the table of Kinds; Generics drops "There are no
+  interfaces" and gains interface bounds; Assignability gains the interface rules; Type declarations
+  drops "interfaces" from "no classes, interfaces, or prototypes"; Types as values: a type
+  expression may not reach an interface; the guidance paragraph above.
+- §5 Expressions: calls through `.`, its two tables, and `?.` on them. `is`: narrowing from an
+  interface, and the type arguments of a generic target. Pipes: "The pipe replaces method chaining"
+  becomes "`.` chains calls of a value's own namespace; the pipe chains calls of any other
+  function."
+- §6 Functions: Calling: named arguments through `.` when the function called is known. Functions on
+  types: "There is no method call … `p.distance(q)` reads a field of `p`, which does not exist"
+  becomes the call through `.`; functions on aliases are reached only through the alias's name, and
+  the `Shape.area` example says so. The rule that a function may not share its name with a field
+  gains a second reason.
+- §7 Nullability: Narrowing: the `else` branch of a test on an interface keeps the interface.
+- §10 Modules: `export interface`, and an exported function needs an exported interface as it needs
+  an exported type. Declaration files: a host's declaration file names the namespace of each type it
+  declares, and a prelude or host type's fields may not shadow a function its namespace offers on
+  it.
+- §11 Standard library: the prelude's rows of the namespace table, with `Ok` and `Err` to `Result`
+  as the one exception to a prelude type's own name; examples move from `xs | Array.map(f)` to
+  `xs.map(f)`. Reflect: no shape for an interface.
+- §12 Dynamic semantics: the three steps of a call through `.` and its panic; the `type(T)` row
+  gains an interface that `T` reaches.
 - `stdlib.md`: its types' rows, and its examples, as in §11.
 - `fmt.md`: the declaration. `doc.md`: an interface's page, and the interfaces a type satisfies
   among those its module sees. `lsp.md`: namespace functions in completion after `.`, go to
@@ -404,19 +465,24 @@ var port = (m.get("port") ?? "80").trim()
   the value's kind, or follows the tag to its namespace, which is the tag itself for a user type.
   Interface declarations are dropped like annotations. Nothing else.
 - **Checker:** most of the work: fields first, then the namespace table, the interface type,
-  satisfaction, assignability, type or bound, `is` narrowing from an interface, the union rule.
-  Satisfaction can be cached per type and interface.
+  satisfaction, assignability, type or bound, `is` narrowing from an interface, the union rules, and
+  the rejection of a type expression that reaches an interface. Satisfaction can be cached per type
+  and interface.
 - **Prelude audit.** No prelude type may have a field that shadows a function its namespace offers
   on it, or `x.f()` would call the field where the user meant the function. The audit of
   `ant-lang.md` and `stdlib.md` finds no such case. `Time` values are opaque, so `Time.year(t)` has
   no field to collide with. `File.Pipe{ read, write }` shadows `File.read` and `File.write`, but
   those take a path, so they were never reachable from a pipe. `Error`, `Ok`, `Err`, `Entry`,
   `Panic`, `Cmd`, `Cmd.Output`, `Html.Element`, `Regex.Match`, `File.Info` and `Url.Parts` have no
-  field whose name their namespace uses for a function on them. The check runs over the prelude's
-  declaration file, so a new clash fails the build.
+  field whose name their namespace uses for a function on them. A script over `prelude.d.ant`, 60
+  records against 492 functions, finds one shared name, `Reflect.Field.type` against `Reflect.type`,
+  which takes a `Reflect.Value` and so is not offered on a `Field`. The check runs over the
+  prelude's declaration file, so a new clash fails the build.
 - **Tools:** `ant fmt`, `ant doc`, LSP completion and implementations, the editor grammars
   (vscode-ant, nvim-ant, intellij-ant, the Monaco package), the site and its examples. `ant fmt`
   formats both call forms and never converts one into the other.
+- **Tests:** `tests/check/alias_cycles.ant` and `tests/unchecked/type_expr_bare_bound.ant` use
+  `Self` as a type name and are renamed.
 
 ## Alternatives
 
@@ -466,7 +532,7 @@ three things: a field, a namespace function bound to `x`, or an error. Ant keeps
 
 ## Decisions
 
-Review on 2026-11-04 settled seven questions.
+A review on 2026-11-04 settled seven questions, and a second on 2026-11-07 four more.
 
 1. **No fields in interfaces.** An interface lists functions only. A structural shape over fields
    stays an anonymous record type or bound, `[T: { name: string }]`, and stays unnamed.
@@ -494,6 +560,19 @@ Review on 2026-11-04 settled seven questions.
    `Iter.range(0, 1000).filter(f).take(5).toArray()`. The checker's first-parameter rule rejects a
    function that is not a `Seq`. The cost is that a future namespace for functions themselves would
    need another name.
+8. **A union whose members share a namespace is one call.** `r.unwrapOr(0)` is checked as
+   `Result.unwrapOr(r, 0)`, with the union as the receiver, since resolving per member could not
+   solve `E` from an `Ok[int]` alone. Any other union resolves per member. `.` never does more than
+   the direct call it stands for.
+9. **Interfaces are not data.** A type expression may not reach an interface, and `Reflect` gains no
+   shape for one: the interpreter discards the declaration, so the name is unbound at run time, and
+   an open set has no members a format could decode into. Typed decoding targets a union.
+10. **The first-parameter rule stays loose.** A generic first parameter accepts anything, so
+    `s.from()` is `String.from(s)`. The calls are correct and rare, and a rule that read the
+    parameter's type for the namespace's name would be a second rule for a cosmetic gain.
+11. **`is` from an interface to a generic type follows the anonymous-record rule.** The test narrows
+    to the one instantiation that satisfies the interface, and it is a compile error when the
+    interface does not determine every type argument.
 
 ## Open questions
 
