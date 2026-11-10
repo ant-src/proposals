@@ -263,7 +263,7 @@ func Port.fromData(d: Type.Data): Result[Port, Error] {
     if n < 0 || n > 65535 { return Result.err(Error{ message: "port ${n} is out of range" }) }
     return Result.ok(Port(uint16(n)))
   }
-  Result.ok(try Type.build(type(uint16), d) | Port)
+  Result.ok(try Type.build(type(uint16), d) | Port())
 }
 
 func Port.toData(p: Port): Type.Data { int64(p) }
