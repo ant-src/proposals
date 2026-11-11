@@ -13,6 +13,7 @@ touches. Nothing here is part of the language until it is accepted and written i
 | [annotations.md](annotations.md)       | Typed `@` annotations on record fields, read through `Reflect`                   | Draft  |
 | [private-fields.md](private-fields.md) | `private` record fields, visible only in the declaring module, checker-enforced  | Draft  |
 | [flags.md](flags.md)                   | A typed `Flags` library: parsing, help and shell completion from one declaration | Draft  |
+| [flag.md](flag.md)                     | A lightweight `Flag` namespace: Go's `flag` rules, typed by each flag's default  | Draft  |
 
 ## Process
 
