@@ -15,8 +15,7 @@ touches. Nothing here is part of the language until it is accepted and written i
 | [flags.md](flags.md)                   | A typed `Flags` library: parsing, help and shell completion from one declaration | Draft    |
 | [flag.md](flag.md)                     | A lightweight `Flag` namespace: Go's `flag` rules, typed by each flag's default  | Draft    |
 | [flags-v2.md](flags-v2.md)             | Typed `Flags.Key[T]` declarations over Go's `flag` rules and usage text          | Draft    |
-| [result-fail.md](result-fail.md)       | `Result.fail(message)`: an `Err` holding an `Error`, without the nested literal  | Draft    |
-| [error.md](error.md)                   | A prelude function `error(message)` for the same need                            | Declined |
+| [error.md](error.md)                   | A prelude function `error(message)`; `Result.fail` landed instead                | Declined |
 
 ## Process
 
