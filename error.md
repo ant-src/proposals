@@ -1,5 +1,8 @@
 # Proposal: `error()` Prelude Function
 
+2026-11-11 · declined: a prelude name cannot be shadowed, so `error` would stop being a variable
+name everywhere; [result-fail.md](result-fail.md) proposes `Result.fail` for the same need.
+
 ## Motivation
 
 Returning a standard error is unnecessarily verbose:

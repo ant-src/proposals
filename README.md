@@ -4,17 +4,19 @@ Design proposals for [Ant](https://github.com/ant-src/spec). A proposal describe
 reaches the specification: the problem, prior art, the proposed API, and the spec sections it
 touches. Nothing here is part of the language until it is accepted and written into the spec.
 
-| Proposal                               | Summary                                                                          | Status |
-| -------------------------------------- | -------------------------------------------------------------------------------- | ------ |
-| [ui.md](ui.md)                         | A client framework and server components on `Html`                               | Sketch |
-| [frozen.md](frozen.md)                 | `freeze` and `Frozen[T]`: deep immutable copies, enforced at run time            | Draft  |
-| [coverage.md](coverage.md)             | Statement and branch coverage for `ant test` and `ant run`, in LCOV              | Draft  |
-| [typed-data.md](typed-data.md)         | `Type.Data`, `Type.build`, hooks and `Json.decode`, on top of `reflection.md`    | Draft  |
-| [annotations.md](annotations.md)       | Typed `@` annotations on record fields, read through `Reflect`                   | Draft  |
-| [private-fields.md](private-fields.md) | `private` record fields, visible only in the declaring module, checker-enforced  | Draft  |
-| [flags.md](flags.md)                   | A typed `Flags` library: parsing, help and shell completion from one declaration | Draft  |
-| [flag.md](flag.md)                     | A lightweight `Flag` namespace: Go's `flag` rules, typed by each flag's default  | Draft  |
-| [flags-v2.md](flags-v2.md)             | Typed `Flags.Key[T]` declarations over Go's `flag` rules and usage text          | Draft  |
+| Proposal                               | Summary                                                                          | Status   |
+| -------------------------------------- | -------------------------------------------------------------------------------- | -------- |
+| [ui.md](ui.md)                         | A client framework and server components on `Html`                               | Sketch   |
+| [frozen.md](frozen.md)                 | `freeze` and `Frozen[T]`: deep immutable copies, enforced at run time            | Draft    |
+| [coverage.md](coverage.md)             | Statement and branch coverage for `ant test` and `ant run`, in LCOV              | Draft    |
+| [typed-data.md](typed-data.md)         | `Type.Data`, `Type.build`, hooks and `Json.decode`, on top of `reflection.md`    | Draft    |
+| [annotations.md](annotations.md)       | Typed `@` annotations on record fields, read through `Reflect`                   | Draft    |
+| [private-fields.md](private-fields.md) | `private` record fields, visible only in the declaring module, checker-enforced  | Draft    |
+| [flags.md](flags.md)                   | A typed `Flags` library: parsing, help and shell completion from one declaration | Draft    |
+| [flag.md](flag.md)                     | A lightweight `Flag` namespace: Go's `flag` rules, typed by each flag's default  | Draft    |
+| [flags-v2.md](flags-v2.md)             | Typed `Flags.Key[T]` declarations over Go's `flag` rules and usage text          | Draft    |
+| [result-fail.md](result-fail.md)       | `Result.fail(message)`: an `Err` holding an `Error`, without the nested literal  | Draft    |
+| [error.md](error.md)                   | A prelude function `error(message)` for the same need                            | Declined |
 
 ## Process
 
