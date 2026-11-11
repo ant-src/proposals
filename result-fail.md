@@ -107,12 +107,14 @@ func find(id: int): Result[User, NotFound | Error] {
 returns its own typed errors and receives `Error` through `try`, which widens; building a fresh
 `Error` there is the rare case, and the long form covers it.
 
-A stand-in `fail` written in Ant shows the current diagnostic for the first line is
-`cannot infer the type parameter T of fail; annotate the result`, because an expected type that does
-not fit solves nothing. That sends the author the wrong way. The checker should say what is wrong:
-that `Result.fail` builds a `Result[T, Error]`, name the expected error type, and point at
-`Result.err`. This is a better message for any generic call whose result type cannot match the
-expected one, not a rule for `Result.fail`.
+The checker says so in those terms, as it does for any generic call whose result no type argument
+fits to the expected type:
+
+```
+cannot use Result.fail where Result[User, NotFound | Error] is expected: it returns Result[T, Error]
+```
+
+The doc comment of `Result.fail` points at `Result.err` for a wider error type.
 
 ## Spec changes
 
@@ -163,5 +165,3 @@ The implementation is one native function. The docs get a `lib/Result/fail` page
 
 1. **The name.** `fail` is short and Kotlin and Effect use the word, but it hints at control flow
    more than `err` does. `Result.error` is too close to `Result.err` to tell apart.
-2. **The diagnostic.** Whether the better message for a result type that cannot match the expected
-   one lands with this proposal or on its own.
