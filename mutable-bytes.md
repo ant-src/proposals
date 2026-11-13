@@ -197,7 +197,7 @@ is the one-byte append, and Ant has no overloading; `get` would suggest `Array.g
 Whether a NaN keeps its payload is not promised, since a backend that holds a float in a JavaScript
 number may canonicalize it.
 
-### Strings and the standard library
+### Strings
 
 Strings stay immutable, valid Unicode, so they no longer share memory with `Bytes`:
 
@@ -205,16 +205,80 @@ Strings stay immutable, valid Unicode, so they no longer share memory with `Byte
 - `String.fromBytes(b)` copies the bytes, validates the copy, and returns it or `null`. It validates
   what it copied, not `b`, so a write racing with the call cannot put invalid UTF-8 into a string.
   `String.fromBytesLossy` copies the same way.
-- An HTTP request's and response's `body` and `bytes`, and a command's text and byte output, are
-  independent copies: writing into `bytes` does not change `body`. The spec's promise that they
-  share one allocation is removed, so a text body is held twice.
 
-Every library function that gives `Bytes` gives a new collection that nothing else holds: a read
-chunk, a decoded value, a digest. A runtime that reads into a reused scratch buffer copies out of it
-or stops reusing it. A function that takes `Bytes` and only reads it, hashing, encoding or writing,
-leaves it untouched and is done with it when it returns; one that keeps it past the call, a buffered
-writer, copies what it keeps. This is Go's `io.Writer` contract, and it does not change the sharing
-of ordinary assignment and channel sends.
+So `Crypto.sha256(String.toBytes(s))` copies `s` once, as Go's `sha256.Sum256([]byte(s))` does. The
+copy runs at memory speed, well ahead of the hash.
+
+### The standard library
+
+Signatures stay as they are, except for the records that hold the same data twice. Two rules say who
+may change what.
+
+**What the library gives is the caller's.** Every function that returns `Bytes` returns a new
+collection that nothing else holds, so the caller may write into it:
+
+- `File.readBytes`, `File.readChunk`, `File.readExactly`
+- `Cmd.readBytes`, `Cmd.Output`'s `stdout` and `stderr`
+- `Http.Response`'s and `Http.Request`'s `body`
+- `Encoding.fromBase64`, `Encoding.fromHex`
+- `Crypto.sha256` and the other digests and HMACs, `Crypto.randomBytes`
+- `String.toBytes`, `Bytes.new`, `slice`, `clone`, `concat`, `fromArray`
+
+The reads of a handle go through one buffer (`stdlib.md`, File), and `readChunk` and `readExactly`
+copy out of it. Today that copy comes free with `Bytes` being a Go string; it becomes explicit.
+
+**What the library takes, it only reads, and only during the call.** A function that takes `Bytes`
+never writes into it and is done with it when it returns:
+
+- `File.writeBytes`, `File.writeChunk`
+- `Encoding.toBase64`, `Encoding.toHex`
+- every `Crypto` input, `Crypto.equal` included
+- `String.fromBytes`, `String.fromBytesLossy`
+- `Bytes.indexOf`, `startsWith`, `endsWith`, `concat`, `toArray`, `read`
+- `input: string | Bytes` of `Cmd.read`, `readBytes` and `capture`; `Http.request`'s and
+  `Http.post`'s `body`
+
+A write from another goroutine during such a call is a data race, under section 9 as for arrays, and
+needs no rule of its own. Three places hold on longer, and none needs a copy of the caller's bytes:
+
+- `File.buffered` copies what it holds into its own buffer, as it does now.
+- `Cmd` input is fed to the child while the call blocks, so the call is still running.
+- `Http.Reply`'s `body` is sent after the handler returns. A write into it then can only come from
+  another goroutine, which is a data race already.
+
+This is Go's `io.Writer` contract. It does not change the sharing of ordinary assignment and channel
+sends.
+
+**Received data is held once, as bytes, and decoded on demand.** Today an HTTP body and a command's
+output are each there twice, as bytes and as text, and the two share memory when the data is UTF-8.
+Mutable bytes cannot share memory with an immutable string, so keeping both would hold every body
+twice. Instead the record keeps the bytes, and the text is a function:
+
+```
+type Response = { status: int, headers: Map[string, string], body: Bytes }
+type Request = { method: string, path: string, query: string, headers: Map[string, string],
+                 body: Bytes, remote: string }
+type Reply = { status: int, headers: Map[string, string], body: string | Bytes }   // unchanged
+
+Http.text(r: Http.Response | Http.Request): string   // the body decoded as all outside text is: a new string per call
+
+type Output = { status: int, statuses: Array[int], stdout: Bytes, stderr: Bytes }
+```
+
+```ant
+let r = try Http.get(url)
+let data = try Json.parse(r.text())               // was Json.parse(r.body)
+File.writeBytes("logo.png", r.body)               // was r.bytes
+```
+
+`r.text()` is exactly what `body` held, `String.fromBytesLossy(r.body)`, since outside text is
+decoded with U+FFFD for each ill-formed subpart (section 11, String). Nothing is lost, the data is
+held once, and the shape is `fetch`'s, a `body` and a `text()`. `Reply` already calls its payload
+`body`, so a proxy returns `r.body` as it came.
+
+A command's text has `Cmd.read`, which returns standard output as text; `capture` keeps both streams
+as bytes, and `String.fromBytesLossy(out.stderr)` gives one as text. There is no `Cmd.text`: an
+`Output` has two streams, and a function per stream would be two names for one call.
 
 ### Concurrency
 
@@ -243,8 +307,13 @@ and the embedding API:
 - **`slice` copies.** A parser that takes `b.slice(i, len(b))` again and again was linear and
   becomes quadratic. It keeps an offset into the original instead, which the integer readers take
   anyway.
-- **Text conversions copy.** `String.toBytes`, `String.fromBytes` and HTTP and command output each
-  copy once, at memory speed.
+- **Text conversions copy.** `String.toBytes` and `String.fromBytes` copy once, at memory speed.
+- **HTTP and command output change shape.** `Http.Response` and `Http.Request` lose the text `body`
+  and the `bytes` field, and gain `body: Bytes` and `Http.text`; `Cmd.Output` loses its text fields,
+  and `stdout` and `stderr` become `Bytes`. These are the only breaking changes, and the checker
+  finds every one: `Json.parse(r.body)` no longer checks, since `body` is `Bytes`, and `r.bytes` and
+  `out.stdoutBytes` name no field. An unchecked program panics at the same places. The docs' `Http`
+  and `Cmd` examples change with them.
 - **The host API.** `Bytes` is passed to Go as a string type today and becomes a type of its own.
   Host constructors copy, and a constructor that adopts a caller's `[]byte` is explicit about it.
 
@@ -262,8 +331,9 @@ and the embedding API:
   covers `pop`. `String.toBytes`, `fromBytes` and `fromBytesLossy` copy.
 - **Section 12, Dynamic semantics.** The table of Values, index write, `for`, and the table of
   runtime panics.
-- **`stdlib.md`.** The ownership paragraph above; HTTP and command `body` and `bytes` no longer
-  share.
+- **`stdlib.md`.** The two ownership rules. `Http.Response`, `Http.Request` and `Cmd.Output` as
+  above, `Http.text`, and the paragraphs that say a body and an output are kept twice in one copy;
+  the File section's note that reads copy out of the handle's buffer.
 
 ## Implementation
 
@@ -312,9 +382,10 @@ functions are `DataView` calls.
   and Rust's `BytesMut` beside `Bytes`. `Bytes` stays the I/O type, and a program computes in a
   `Buffer` and converts. It is the nearest alternative, and this proposal pays each cost it avoids:
   - **Sharing with text.** With `Buffer`, `slice` and the string conversions stay free. Here they
-    copy, and a text body is held twice. Copy on write would avoid that, at the price of a runtime
-    invariant that memory a string shares is never written. This proposal takes the copies: they are
-    linear, at memory speed, and visible in the spec, where copy on write is hidden machinery.
+    copy, and an HTTP body is decoded on demand instead of being held as text too. Copy on write
+    would avoid that, at the price of a runtime invariant that memory a string shares is never
+    written. This proposal takes the copies: they are linear, at memory speed, and visible in the
+    spec, where copy on write is hidden machinery.
   - **Values nobody else can change.** A digest, a key, or bytes sent to another goroutine are safe
     today without a copy. Here they are in the position of arrays, which Ant already asks programs
     to handle, under the same section 9 and the same map-key rule.
@@ -356,6 +427,4 @@ functions are `DataView` calls.
 
 ## Open questions
 
-1. **Sharing HTTP `body` and `bytes`.** Holding a text body twice may matter for large responses.
-   Making one of the two a function, computed on demand, would avoid it at the cost of an API
-   change.
+None in this draft.
