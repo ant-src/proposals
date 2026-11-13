@@ -1,6 +1,6 @@
 # Proposal: mutable `Bytes`
 
-2026-11-13 · draft
+2026-11-14 · accepted; in the spec (spec 923b171), implementation in progress
 
 ## Summary
 

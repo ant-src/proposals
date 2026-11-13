@@ -16,9 +16,9 @@ new collection types, and reference semantics stay as they are.
 
 ## Motivation
 
-Section 4 says: "Fields are mutable, and there is no `readonly` or frozen form. Strings, `Bytes`,
-time values, and patterns are immutable; records, arrays, maps, and sets are not." That leaves five
-problems that every non-trivial program runs into.
+Section 4 says: "Fields are mutable, and there is no `readonly` or frozen form. Strings, time
+values, and patterns are immutable; records, arrays, maps, sets, and `Bytes` are not." That leaves
+five problems that every non-trivial program runs into.
 
 1. **Sharing across goroutines needs a lock even when nobody writes.** A configuration loaded once
    and read by every handler is a data race (section 9) if anything could write it, and nothing in
@@ -38,9 +38,11 @@ problems that every non-trivial program runs into.
    message on a channel all want to know that a value will not change underneath them. Today the
    receiver has to copy on receipt and trust the sender to copy on send.
 
-The `Bytes` decision (spec d6b3444) made the same move for binary data: an immutable value can be
-shared without copying and serves as a map key. This proposal extends that property to the four
-mutable containers without adding a second set of them.
+Strings, time values and patterns show what immutability buys: such a value can be shared without
+copying and serves as a map key. This proposal extends that property to the five mutable containers
+without adding a second set of them. `Bytes` was immutable until the mutable-bytes change (spec
+923b171) made it the working storage for binary data; `Frozen[Bytes]` gives the immutable bytes back
+where a program wants them.
 
 ## Prior art
 
@@ -112,8 +114,8 @@ advisory").
 | Minimal syntax                          | Strong  | No keyword and no literal. `freeze([…])` covers constants                                                                                                       |
 | Structural `==`, composite map keys     | Strong  | Ant already has what Composites add to JavaScript. Frozen keys close the "mutating a key" hole                                                                  |
 | Goroutines and shared memory            | Strong  | A frozen value sent on a channel can't be changed by the sender afterwards, which is a common Go bug. `Atomic` plus `freeze` gives snapshots                    |
-| `Bytes`, `string`, `Html` are immutable | Good    | The same property, extended to containers. `Bytes` stays its own type because of its representation, not its mutability                                         |
-| Library close to Go                     | Weak    | Go has nothing like it and relies on convention and the race detector. Ant already goes beyond Go with structural `==` and `Bytes`                              |
+| `string`, `Html` are immutable          | Good    | The same property, extended to containers, `Bytes` among them since it became mutable                                                                           |
+| Library close to Go                     | Weak    | Go has nothing like it and relies on convention and the race detector. Ant already goes beyond Go with structural `==`                                          |
 | Interpreter stays simple                | Good    | One flag, about a dozen checks, and one graph walk. Persistent structures are deferred for this reason                                                          |
 | JavaScript backend, exact results       | Good    | Uses the same flag, without `Object.freeze`, so behavior is identical                                                                                           |
 | A checked program panics only on values | Partial | `Frozen[T]` assignable to `T` lets a frozen value reach a plain-typed write. That is the Java trade-off, made smaller by the checker                            |
@@ -134,11 +136,11 @@ freeze[T](v: T): Frozen[T]       // a deep immutable copy of v; v itself when v 
 
 ### Run time
 
-1. **What freezes.** An array, map, set or record that is not frozen is copied. Each element, key,
-   value and field of the copy is the frozen form of the original's. The copy is marked frozen
-   before `freeze` returns it, so no other goroutine can see it mutable.
+1. **What freezes.** An array, map, set, record or `Bytes` that is not frozen is copied. Each
+   element, key, value and field of the copy is the frozen form of the original's. The copy is
+   marked frozen before `freeze` returns it, so no other goroutine can see it mutable.
 2. **What is shared.** A value that is already frozen is returned as it is, with no copy, so
-   `freeze(freeze(x))` is `freeze(x)` and costs nothing. Numbers, strings, `Bytes`, `Html`, tagged
+   `freeze(freeze(x))` is `freeze(x)` and costs nothing. Numbers, strings, `Html`, tagged
    primitives, time values, patterns, tags, `null` and `void` are immutable already and are returned
    unchanged. Functions, sync objects, `Random` generators and resources are kept by reference too.
    They have identity rather than contents, and a frozen config that holds a channel or a handler
@@ -205,13 +207,14 @@ func reload(): void {
 `Frozen[T]` is the type of a frozen value whose mutable form has type `T`. The checker computes it
 structurally:
 
-- `Frozen[T]` is `T` when `T` is immutable already: a primitive, `string`, `Bytes`, `Html`, a named
-  primitive type, a time type, `Regex.Pattern`, a function type, a sync, random or resource type,
-  `null`, `void` or `never`.
+- `Frozen[T]` is `T` when `T` is immutable already: a primitive, `string`, `Html`, a named primitive
+  type, a time type, `Regex.Pattern`, a function type, a sync, random or resource type, `null`,
+  `void` or `never`.
 - `Frozen[A | B]` is `Frozen[A] | Frozen[B]`, and `Frozen[Frozen[T]]` is `Frozen[T]`.
 - Reading an element of `Frozen[Array[T]]` gives `Frozen[T]`, and likewise a key or value of
   `Frozen[Map[K, V]]`, a member of `Frozen[Set[T]]`, and a field of `Frozen[R]` for a record type
-  `R`. `is` narrows inside: `x is Circle` on `Frozen[Shape]` gives `Frozen[Circle]`.
+  `R`. `Frozen[Bytes]` holds bytes, which have nothing inside to freeze; its writes panic. `is`
+  narrows inside: `x is Circle` on `Frozen[Shape]` gives `Frozen[Circle]`.
 - For a type parameter, `Frozen[T]` stays as written until `T` is known.
 
 Assignability (section 4) gains two rules:
@@ -291,12 +294,12 @@ collection, that is the cost the Later section addresses.
 
 ## Implementation
 
-- **Interpreter.** Add a `frozen` flag to `Array`, `Map`, `Set` and `Record`. Set it before the
-  value escapes `freeze`, and never clear it. Check it in the store paths of those four kinds (rule
-  5); reads and variable assignment are untouched. `freeze` walks the graph with a memo table that
-  keeps sharing and cycles. A frozen map or set could skip its read lock, and a frozen key could
-  cache its hash. Both are optional and need the benchmarks below to justify them. This adds no new
-  value kind, so `==`, hashing and rendering need no changes.
+- **Interpreter.** Add a `frozen` flag to `Array`, `Map`, `Set`, `Record` and `Bytes`. Set it before
+  the value escapes `freeze`, and never clear it. Check it in the store paths of those five kinds
+  (rule 5); reads and variable assignment are untouched. `freeze` walks the graph with a memo table
+  that keeps sharing and cycles. A frozen map or set could skip its read lock, and a frozen key
+  could cache its hash. Both are optional and need the benchmarks below to justify them. This adds
+  no new value kind, so `==`, hashing and rendering need no changes.
 - **Checker.** Add the `Frozen` type node with its normalization, the two assignability rules, the
   write check, and inference through `Frozen[Array[T]]` against `Array[T]`. Hover and `ant doc`
   print `Frozen[Point]`.
@@ -341,8 +344,8 @@ collection, that is the cost the Later section addresses.
 - **Shallow freeze.** A frozen config whose `routes` map is still mutable is no snapshot at all, and
   shallow freezing gives no sharing guarantee or stable keys.
 - **Separate immutable types** (`Vector`, `PMap` and so on). Splitting `Bytes` from `Array[byte]`
-  was worth a second type because of a 24× memory difference. Here the data is the same, and a
-  second API would double section 11.
+  was worth a second type because of a 24× memory difference, and its mutability is that of arrays.
+  Here the data is the same, and a second API would double section 11.
 
 ## Later: persistent updates
 

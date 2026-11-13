@@ -84,7 +84,7 @@ replies. With this proposal they become small reply types and one call each:
 type Block = { type: string, text: string = "" }
 type AnthropicReply = { stopReason: string | null = null, content: Array[Block] }
 
-var reply = try Json.decode(r.body, type(AnthropicReply), key: Type.snakeCase)
+var reply = try Json.decode(r.text(), type(AnthropicReply), key: Type.snakeCase)
 var text = reply.content | Array.filter({ x.type == "text" }) | Array.map({ x.text }) | String.concat()
 ```
 
