@@ -92,8 +92,10 @@ through every alias. `let` fixes the binding, not the contents.
   in reflection stay as they are. Boxing into a `Reflect.Value` and out shares the collection.
 
 There is no literal and no capacity. A collection grows by amortized doubling, and a program that
-knows the size asks for it with `Bytes.new(n)` and assigns by index. A collection holds at most 2^31
-− 1 bytes, and a function that would grow it past that panics before changing anything.
+knows the size asks for it with `Bytes.new(n)` and assigns by index. Growth is bounded by memory, as
+for arrays and strings; the limit of 2^31 − 1 guards only `Bytes.new`, whose count alone makes the
+size, so a wrong count fails at once (section 11, String). What I/O can return is therefore as large
+as it is today.
 
 ### Functions
 
@@ -109,7 +111,7 @@ Bytes.extend(b: Bytes, src: Bytes): void                        // appends src a
 Bytes.pop(b: Bytes): byte | null                                // removes and returns the last byte; null when empty
 Bytes.truncate(b: Bytes, n: int): void                          // keeps the first n bytes; panics if n is outside 0 ..= length
 Bytes.fill(b: Bytes, x: byte, from: int = 0, to: int | null = null): void   // to: the length when null; panics as Array.slice does
-Bytes.copy(dst: Bytes, at: int, src: Bytes, from: int = 0, to: int | null = null): void   // panics unless the range fits in dst
+Bytes.copy(dst: Bytes, at: int, src: Bytes, from: int = 0, to: int | null = null): void   // panics unless 0 <= at <= len(dst) and the range fits
 ```
 
 `Bytes.slice` keeps its signature and now copies, as `Array.slice` does. `concat`, `fromArray` and
@@ -120,8 +122,9 @@ collection for reuse, and the bytes it drops are never visible again: growth wri
 from what is appended. `fill(b, byte(0))` zeroes without changing the length.
 
 `copy` overwrites `to − from` bytes of `dst` from `at`, and never grows it; `extend` grows. It
-panics, before writing, when `from` and `to` are not a range of `src` as for `Array.slice`, or when
-`at + (to − from)` is above `len(dst)`. Overlap works as if the source range were read before any
+panics, before writing anything, unless `from` and `to` are a range of `src` as for `Array.slice`,
+`0 <= at <= len(dst)`, and `to − from <= len(dst) − at`. Written that way the check cannot overflow,
+and an empty copy checks its bounds too. Overlap works as if the source range were read before any
 byte is written, so `b.copy(1, b, 0, 3)` shifts three bytes right by one. The range arguments take
 the place of Go's slicing, since `src.slice(...)` would copy first.
 
@@ -217,8 +220,8 @@ may change what.
 collection that nothing else holds, so the caller may write into it:
 
 - `File.readBytes`, `File.readChunk`, `File.readExactly`
-- `Cmd.readBytes`, `Cmd.Output`'s `stdout` and `stderr`
-- `Http.Response`'s and `Http.Request`'s `body`
+- `Cmd.readBytes`, `Cmd.Output`'s `stdoutBytes` and `stderrBytes`
+- `Http.Response`'s and `Http.Request`'s `bytes`
 - `Encoding.fromBase64`, `Encoding.fromHex`
 - `Crypto.sha256` and the other digests and HMACs, `Crypto.randomBytes`
 - `String.toBytes`, `Bytes.new`, `slice`, `clone`, `concat`, `fromArray`
@@ -238,12 +241,21 @@ never writes into it and is done with it when it returns:
   `Http.post`'s `body`
 
 A write from another goroutine during such a call is a data race, under section 9 as for arrays, and
-needs no rule of its own. Three places hold on longer, and none needs a copy of the caller's bytes:
+needs no rule of its own. Where the runtime would hold the bytes past the call, it copies them, or
+shows that it cannot:
 
 - `File.buffered` copies what it holds into its own buffer, as it does now.
-- `Cmd` input is fed to the child while the call blocks, so the call is still running.
-- `Http.Reply`'s `body` is sent after the handler returns. A write into it then can only come from
-  another goroutine, which is a data race already.
+- `Http.request` and `Http.post` copy a `Bytes` body when the call starts. Go's transport may go on
+  reading a request body after the call returns, errors included, and closes it on a goroutine of
+  its own (`net/http`, `RoundTripper`). Without the copy, a program that writes into its bytes right
+  after the call returns would race with a goroutine it cannot see.
+- `Cmd.read`, `readBytes` and `capture` copy a `Bytes` input when the call starts, for the same
+  reason: the input is fed by a goroutine of the runtime's, and a cancelled context can end the call
+  before that goroutine is done.
+- `Http.Reply`'s `body` is sent after the handler returns and needs no copy: a write into it then
+  can only come from another goroutine, which is a data race already.
+
+Each copy runs at memory speed, beside a call bound by the network or a child process.
 
 This is Go's `io.Writer` contract. It does not change the sharing of ordinary assignment and channel
 sends.
@@ -251,32 +263,38 @@ sends.
 **Received data is held once, as bytes, and decoded on demand.** Today an HTTP body and a command's
 output are each there twice, as bytes and as text, and the two share memory when the data is UTF-8.
 Mutable bytes cannot share memory with an immutable string, so keeping both would hold every body
-twice. Instead the record keeps the bytes, and the text is a function:
+twice. Instead the record keeps the bytes field it has today and loses the text one, and the text is
+a function:
 
 ```
-type Response = { status: int, headers: Map[string, string], body: Bytes }
+type Response = { status: int, headers: Map[string, string], bytes: Bytes }
 type Request = { method: string, path: string, query: string, headers: Map[string, string],
-                 body: Bytes, remote: string }
+                 bytes: Bytes, remote: string }
 type Reply = { status: int, headers: Map[string, string], body: string | Bytes }   // unchanged
 
-Http.text(r: Http.Response | Http.Request): string   // the body decoded as all outside text is: a new string per call
+Http.text(r: Http.Response | Http.Request): string   // the bytes decoded as all outside text is: a new string per call
 
-type Output = { status: int, statuses: Array[int], stdout: Bytes, stderr: Bytes }
+type Output = { status: int, statuses: Array[int], stdoutBytes: Bytes, stderrBytes: Bytes }
 ```
 
 ```ant
 let r = try Http.get(url)
 let data = try Json.parse(r.text())               // was Json.parse(r.body)
-File.writeBytes("logo.png", r.body)               // was r.bytes
+File.writeBytes("logo.png", r.bytes)              // unchanged
 ```
 
-`r.text()` is exactly what `body` held, `String.fromBytesLossy(r.body)`, since outside text is
-decoded with U+FFFD for each ill-formed subpart (section 11, String). Nothing is lost, the data is
-held once, and the shape is `fetch`'s, a `body` and a `text()`. `Reply` already calls its payload
-`body`, so a proxy returns `r.body` as it came.
+`r.text()` is exactly what `body` held, `String.fromBytesLossy(r.bytes)`, since outside text is
+decoded with U+FFFD for each ill-formed subpart (section 11, String). Nothing is lost and the data
+is held once. A proxy returns `Http.Reply{status: r.status, headers: r.headers, body: r.bytes}`.
+
+The names are chosen for the migration. Every use of the bytes keeps working, and every use of the
+text names a field that is gone, so the checker finds each one. Keeping `body` with the type
+`Bytes`, as `fetch` has it, would read better but migrate worse: `println(r.body)` and `"${r.body}"`
+would still check and render `Bytes(...)`, `len(r.body)` would count bytes where it counted code
+points, and `Json.stringify(r.body)` would check and panic.
 
 A command's text has `Cmd.read`, which returns standard output as text; `capture` keeps both streams
-as bytes, and `String.fromBytesLossy(out.stderr)` gives one as text. There is no `Cmd.text`: an
+as bytes, and `String.fromBytesLossy(out.stderrBytes)` gives one as text. There is no `Cmd.text`: an
 `Output` has two streams, and a function per stream would be two names for one call.
 
 ### Concurrency
@@ -307,12 +325,12 @@ embedding API:
 - **`slice` copies.** A parser that takes `b.slice(i, len(b))` again and again was linear and
   becomes quadratic. It keeps an offset into the original instead, which `read` takes anyway.
 - **Text conversions copy.** `String.toBytes` and `String.fromBytes` copy once, at memory speed.
-- **HTTP and command output change shape.** `Http.Response` and `Http.Request` lose the text `body`
-  and the `bytes` field, and gain `body: Bytes` and `Http.text`; `Cmd.Output` loses its text fields,
-  and `stdout` and `stderr` become `Bytes`. These are the only breaking changes, and the checker
-  finds every one: `Json.parse(r.body)` no longer checks, since `body` is `Bytes`, and `r.bytes` and
-  `out.stdoutBytes` name no field. An unchecked program panics at the same places. The docs' `Http`
-  and `Cmd` examples change with them.
+- **HTTP and command output change shape.** `Http.Response` and `Http.Request` lose `body`, and
+  `Cmd.Output` loses `stdout` and `stderr`; `Http.text` is new. These are the only breaking changes
+  in the library, and the checker finds every one, since each old use names a field that is gone:
+  `Json.parse(r.body)` becomes `Json.parse(r.text())`, and `out.stdout` becomes
+  `String.fromBytesLossy(out.stdoutBytes)` or a `Cmd.read`. An unchecked program panics at the same
+  places. The docs' `Http` and `Cmd` examples change with them.
 - **`Reflect.same` on `Bytes`.** It falls back to `==` for `Bytes` today, so two equal collections
   are the same; now it reports identity. A program that relied on it compares with `==`.
 - **The host API.** `Bytes` is passed to Go as a string type today and becomes a type of its own.
@@ -358,7 +376,9 @@ What needs care:
 - **Scratch storage.** `internal/lib/file.go` makes `Bytes` from a reused scratch slice, which is a
   copy today only because `Bytes` is a Go string. It copies explicitly.
 - **HTTP and commands.** `Response`, `Request` and `Output` lose their text fields; `Http.text`
-  decodes on each call, as reading the field did once.
+  decodes on each call, as reading the field did once. The client and `Cmd` copy a `Bytes` input
+  into Go storage before handing it to `net/http` or `os/exec`, so no goroutine of theirs reads the
+  program's bytes after the call returns.
 - **Tools.** The debugger's inspector, the host API's table of Go types, and the docs. Highlighting
   does not change.
 
