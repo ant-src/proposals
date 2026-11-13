@@ -7,8 +7,9 @@
 Make `Bytes` a mutable, growable sequence of bytes that is shared by reference, as an array is, and
 add functions that read and write fixed-size integers and floats in it. There is still one byte
 type: what I/O gives and takes is what a program computes in. `b[i] = x` writes in place, `push` and
-`extend` grow, and `slice` copies. The standard library keeps its signatures, except that an HTTP
-body and a command's output are held once, as `Bytes`, with the text decoded on demand.
+`extend` grow, and `slice` copies. The standard library keeps its signatures, except that received
+data is held once: an HTTP body as `Bytes` with the text decoded on demand, and a command's output
+as text from `Cmd.capture` or as `Bytes` from a new `Cmd.captureBytes`.
 
 ```ant
 // A frame: a big-endian length, then the payload masked with a 4-byte key.
