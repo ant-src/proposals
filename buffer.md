@@ -1,6 +1,6 @@
 # Proposal: `Buffer` and binary integers
 
-2026-11-12 · draft
+2026-11-13 · draft, revised after review
 
 ## Summary
 
@@ -16,8 +16,10 @@ func frame(payload: Bytes, key: Bytes): Bytes {
   let buf = Buffer.new()
   buf.pushUint32(uint32(len(payload)))
   buf.extend(payload)
-  for i in Array.range(4, len(buf)) {
+  var i = 4
+  while i < len(buf) {
     buf[i] = Bits.xor(buf[i], key[(i - 4) % 4])
+    i += 1
   }
   buf.toBytes()
 }
@@ -38,11 +40,12 @@ that computes bytes one at a time builds an `Array[byte]` and converts it." An a
 per element, so that path is expensive in memory, and a change to one byte of existing `Bytes` goes
 through `Bytes.toArray` and `Bytes.fromArray`, two copies of the whole.
 
-Measured on ant master of 2026-11-12, on an Apple M-series laptop:
+Measured on ant master of 2026-11-12, on an Apple M4 Pro, the times the same over three runs to
+within a few percent:
 
 | Program                                                            | Time   | Peak memory |
 | ------------------------------------------------------------------ | ------ | ----------- |
-| An empty loop of 4 million iterations, for scale                   | 0.71 s | 22 MB       |
+| A loop of 4 million iterations that only adds, for scale           | 0.40 s | 22 MB       |
 | Encode 4 MB a byte at a time: `push`, then `Bytes.fromArray`       | 0.92 s | 259 MB      |
 | Mask 4 MB with a key into `Array.filled`, then `Bytes.fromArray`   | 0.96 s | 356 MB      |
 | Read a million big-endian `uint32` with `b[i]` and arithmetic      | 0.52 s | 28 MB       |
@@ -50,25 +53,26 @@ Measured on ant master of 2026-11-12, on an Apple M-series laptop:
 
 Three things follow.
 
-- **Memory, not speed, is the problem.** A program that builds 4 MB holds 65 to 90 bytes per byte at
-  its peak. The loop itself costs what any Ant loop costs.
+- **Memory is the problem, and it costs time too.** A program that builds 4 MB holds 65 to 90 bytes
+  per byte at its peak, and takes over twice as long as the bare loop, most of the difference in
+  allocation and collection.
 - **A change in place is linear.** One byte of a megabyte takes 17 ms. A program that patches a
   checksum into a header, draws into a pixel buffer, or masks a frame pays that per change, or keeps
   the data as an array for its whole life and pays the memory.
 - **Integers are spelled out by hand.** A `uint32` is four index reads, four conversions and three
-  multiplications, and a signed or little-endian one is easier to get wrong. The `Bytes` decision
-  deferred readers "until a program needs them"; every binary format needs them.
+  multiplications, and a signed or little-endian one is easier to get wrong. Readers were left out
+  when `Bytes` was added, until a program needed them; every binary format does.
 
 ## Prior art
 
-| Language | Immutable          | Mutable                  | Integers                                   |
-| -------- | ------------------ | ------------------------ | ------------------------------------------ |
-| Python   | `bytes`            | `bytearray`              | `int.from_bytes`, `struct`                 |
-| Rust     | `Bytes`, `&[u8]`   | `BytesMut`, `Vec<u8>`    | `u32::from_be_bytes`, `Buf`/`BufMut`       |
-| Java     | `ByteString` (lib) | `byte[]`, `ByteBuffer`   | `ByteBuffer.getInt`, `order()`             |
-| JS       | none               | `Uint8Array`             | `DataView.getUint32(offset, littleEndian)` |
-| Go       | `string`           | `[]byte`, `bytes.Buffer` | `binary.BigEndian.Uint32`, `AppendUint32`  |
-| Swift    | `Data` (value)     | `Data` (copy on write)   | `withUnsafeBytes`, `load(as:)`             |
+| Language | Immutable              | Mutable                     | Integers                                   |
+| -------- | ---------------------- | --------------------------- | ------------------------------------------ |
+| Python   | `bytes`                | `bytearray`                 | `int.from_bytes`, `struct`                 |
+| Rust     | `Bytes` (lib), `&[u8]` | `BytesMut` (lib), `Vec<u8>` | `u32::from_be_bytes`, `Buf`/`BufMut`       |
+| Java     | `ByteString` (lib)     | `byte[]`, `ByteBuffer`      | `ByteBuffer.getInt`, `order()`             |
+| JS       | none                   | `Uint8Array`                | `DataView.getUint32(offset, littleEndian)` |
+| Go       | `string`               | `[]byte`, `bytes.Buffer`    | `binary.BigEndian.Uint32`, `AppendUint32`  |
+| Swift    | `Data` (value)         | `Data` (copy on write)      | `withUnsafeBytes`, `load(as:)`             |
 
 Python and Rust have exactly this pair, and both convert between the two explicitly. Go has one
 mutable type and uses `string` where it needs an immutable key; Ant's `Bytes` is stored as a Go
@@ -82,8 +86,9 @@ shape that fits Ant: an offset and a flag, where Go slices and picks a byte-orde
 `Buffer` is a kind of its own, built in as `Bytes` is: declared in the prelude, not a primitive, and
 taken by the same language forms.
 
-- `len(buf)` is the number of bytes, and `for x in buf` yields each as a `byte`. The loop reads the
-  length once, when it starts, as a loop over an array does.
+- `len(buf)` is the number of bytes, and `for x in buf` yields each as a `byte`. The loop goes by
+  index while the index is below the current length, as a loop over an array does, so bytes appended
+  during it are visited.
 - `buf[i]` reads a `byte` and `buf[i] = x` writes one; both panic when `i` is outside
   `0 ..= len(buf) - 1`. `x` is a `byte`, so an `int` is converted as anywhere: `buf[i] = byte(n)`.
 - `buf is Buffer` tests the kind. A `Buffer` is never a `Bytes`, nor the reverse.
@@ -94,26 +99,27 @@ taken by the same language forms.
 - For reflection it is opaque, as `Bytes` is.
 
 There is no literal and no capacity. A buffer grows as an array does, by amortized doubling, and a
-program that knows the size asks for it with `Buffer.new(n)` and assigns by index.
+program that knows the size asks for it with `Buffer.new(n)` and assigns by index. A buffer holds at
+most 2^31 − 1 bytes, and a function that would grow it past that panics.
 
 ### Functions
 
 ```
 Buffer.new(size: int = 0): Buffer                                // size zero bytes; panics if size < 0 or above 2^31 − 1
 Buffer.from(b: Bytes): Buffer                                    // a copy
-Buffer.toBytes(buf: Buffer): Bytes                               // a copy; buf is unchanged
+Buffer.toBytes(buf: Buffer, from: int = 0, to: int | null = null): Bytes   // a copy of from up to to, the length when null; panics as Array.slice does
 Buffer.length(buf: Buffer): int
-Buffer.slice(buf: Buffer, from: int, to: int): Bytes             // a copy; panics as Array.slice does
 Buffer.push(buf: Buffer, x: byte): void                          // mutates, as do the functions below
 Buffer.extend(buf: Buffer, src: Bytes | Buffer): void            // appends src as it was at the call
 Buffer.copy(buf: Buffer, at: int, src: Bytes | Buffer): void     // overwrites from at; panics if at or at + len(src) is outside 0 ..= length
-Buffer.fill(buf: Buffer, x: byte, from: int = 0, to: int | null = null): void   // to: the length; panics as slice does
+Buffer.fill(buf: Buffer, x: byte, from: int = 0, to: int | null = null): void   // to: the length when null; panics as Array.slice does
 Buffer.truncate(buf: Buffer, n: int): void                       // keeps the first n bytes; panics if n is outside 0 ..= length
 ```
 
 `Buffer.copy` does not grow the buffer, as Go's `copy` does not; `extend` does. `truncate(0)`
 empties a buffer for reuse. Text goes in as its bytes: `buf.extend(String.toBytes(s))`, which need
-not copy `s`.
+not copy `s`. There is no `Buffer.slice`: `Array.slice` gives an array, so a `slice` here would be
+expected to give a `Buffer`, and what a program wants from part of a buffer is `Bytes` to hand on.
 
 Everything else stays on `Bytes`. Searching, `startsWith`, hashing, encoding, and every read and
 write of a file, a connection or a command take and give `Bytes`, and a program with a `Buffer`
@@ -151,6 +157,10 @@ when `n` does not fit, as every conversion does.
 `uint8` and `int8` are there for uniformity: `b.uint8(i)` is `b[i]`, and `b.int8(i)` saves a
 conversion that would otherwise panic above 127.
 
+That is ten readers on each type and twenty writers, forty names beside the nine above. They are
+regular, so a reader learns one, but the count is the cost of this section; Alternatives has the
+shorter form and why it is not taken.
+
 ### Concurrency
 
 A `Buffer` is shared between goroutines by reference, as an array is, and section 9 applies:
@@ -171,14 +181,19 @@ checker's message for `b[i] = x` on `Bytes` points to `Buffer.from(b)`.
 
 ## Spec changes
 
-- **Section 4, Types.** `Buffer` beside `Bytes` in Primitives, the kinds table, and the lists for
-  `is`. Records, arrays, maps, sets and `Buffer` are the mutable kinds.
-- **Sections 6 and 8.** `for` and `len` take a `Buffer`.
+- **Section 4, Types.** `Buffer` beside `Bytes` in Primitives and the table of Kinds. Records,
+  arrays, maps, sets and `Buffer` are the mutable kinds.
+- **Section 5, Expressions.** A `Buffer` in the table of Calls through `.`, with the namespace
+  `Buffer`, so that `buf.push(x)` resolves; `Buffer` among the names `is` takes; `for` over a
+  `Buffer` in Loops.
 - **Section 9, Data races.** The paragraph above.
-- **Section 11.** A `Buffer` section after `Bytes`; the readers in `Bytes`; the sentence on building
-  an `Array[byte]` replaced; rendering; `Json.stringify`.
-- **Reflection.** `Buffer` in the opaque list.
-- **Run-time semantics.** Index read and write, `==`, `is`, `for`, and the panics table.
+- **Section 10, Declaration files.** `Buffer` with `Bytes` and `Html` as a bodiless prelude type
+  that is a kind of its own.
+- **Section 11.** `Buffer` in the list of namespaces that are types; `len` in Prelude; a `Buffer`
+  section after `Bytes`; the readers in `Bytes`; the sentence on building an `Array[byte]` replaced;
+  rendering; `Json.stringify`; `Buffer` in Reflect's opaque list.
+- **Section 12, Dynamic semantics.** The table of Values, index read and write, `==`, `is`, `for`,
+  and the table of runtime panics.
 - **`stdlib.md`.** No change.
 
 ## Implementation
@@ -190,9 +205,14 @@ integer functions are `encoding/binary` calls. The interpreter gains one case in
 index write, `len`, `for`, `==`, hashing, rendering and `is`; the checker allows the same forms. No
 existing path changes, and arrays keep their one representation.
 
+The tools that know `Bytes` by name learn `Buffer`: the debugger's inspector, the host API's table
+of Go types, the TextMate grammars of vscode-ant and the site, the other editors' highlighting, and
+the docs, with a page per function.
+
 Expected, not yet measured: the two building programs above at about 1 to 2 bytes per byte, the
-one-byte change in constant time, and a `uint32` read several times faster as one call. A per-byte
-loop gains little in time, since the loop is the cost.
+one-byte change in constant time, and a `uint32` read several times faster as one call. The building
+programs should come near the bare loop's time, about twice as fast as now. A prototype that reruns
+the table comes before acceptance.
 
 For the JavaScript backend both `Bytes` and `Buffer` are a `Uint8Array`, the second with a length
 and room to grow, and the integer functions are `DataView` calls.
@@ -214,18 +234,54 @@ and room to grow, and the integer functions are `DataView` calls.
   interpreter never knows `T`, so an array would have to switch representation on what is stored in
   it, and every `Array` function would have a second path. That is hidden machinery in the part of
   the runtime that is meant to stay simple.
-- **Make `Bytes` mutable.** One type, as in Go. It gives up `Bytes` as a map key, the sharing with
-  strings that makes `String.fromBytes` and an HTTP `body` beside its `bytes` free, and safe passing
-  between goroutines, and it goes against `frozen.md`.
+- **Make `Bytes` mutable.** See the next section.
+- **Two generic writers**, `Buffer.pushNumber[T: Number](buf, v: T, little)` and `setNumber`, in
+  place of twenty. A value carries its kind at run time, so they can be written. But then the width
+  comes from whatever type the argument happens to have: `buf.pushNumber(len(payload))` writes eight
+  bytes where four were meant, and checks. With `pushUint32` the same slip is a compile error.
 - **A write-only builder, with `Bytes.set` and `Bytes.xor` returning copies.** It covers encoding. A
   change in place stays linear, and each bulk operation someone needs becomes a library function.
 - **Readers only.** Worth having alone, and the first step of the implementation, but it leaves both
   memory rows of the table as they are.
 
+## Alternative: mutable `Bytes`
+
+The nearest alternative is no new type: `Bytes` itself becomes growable and takes `b[i] = x`, as
+Go's `[]byte` does, and the integer writers go on `Bytes`.
+
+It has real merits. There is one type to learn and no conversion between two; about twenty functions
+fewer; no copy when what was built is written out or hashed; and existing programs keep working,
+since an assignment that was an error becomes legal. Most of what immutability is said to buy,
+arrays already do without: an array compares by contents, is a map key under the rule that it is not
+changed afterwards, and is shared between goroutines under section 9.
+
+What it costs:
+
+- **The sharing with text needs hidden machinery.** `Bytes` is stored as a string, which is why
+  `Bytes.slice`, `String.toBytes` and `String.fromBytes` need not copy, and why an HTTP `body` and
+  its `bytes` are one buffer. Mutable bytes either copy in each of those places, as Go does between
+  `[]byte` and `string`, and hold every text body twice, or copy on the first write. Copying on
+  write keeps the reading paths free, but it puts an invariant into the runtime: memory a string
+  shares is never written in place, or a string stops being valid Unicode.
+- **Values nobody else can change.** What `File.readBytes`, `Cmd.readBytes` or an HTTP body gives
+  can today be kept, cached, used as a key, or sent to another goroutine without a copy and without
+  a thought. Digests and keys are `Bytes`. Mutable, they are in the position of arrays: safe until
+  some function that was handed them writes.
+- **No immutable bytes at all.** Go falls back on `string` for that. An Ant string is Unicode text
+  and cannot hold arbitrary bytes, so until `frozen.md` lands there would be nothing.
+- **Churn.** Section 4 lists `Bytes` among the immutable kinds, `frozen.md` builds on that, the docs
+  say it on every `Bytes` page, and the host API passes `Bytes` as a Go string type.
+
+The choice is also not symmetric. Adding `Buffer` leaves `Bytes` and its implementation untouched,
+and `Bytes` can still be made mutable later, compatibly, if two types prove a burden. Mutable
+`Bytes` cannot be made immutable again once programs assign into it. So this proposal takes the step
+that can be revisited.
+
 ## Fit with other proposals
 
-- **`frozen.md`.** `freeze` of a `Buffer` should give `Bytes`, the immutable form that exists
-  already, so `Frozen[Buffer]` is `Bytes`.
+- **`frozen.md`.** `Frozen[T]` is assignable to `T` and a frozen value keeps its kind, so `freeze`
+  of a `Buffer` is a frozen `Buffer`, a copy whose writes panic, as for an array. It is not `Bytes`;
+  a program that wants `Bytes` calls `toBytes`.
 - **`typed-data.md`.** `Type.Data` keeps `Bytes`. A `Buffer` field is opaque and so refused, as a
   channel is; a decoder gives `Bytes`.
 
