@@ -14,7 +14,6 @@ touches. Nothing here is part of the language until it is accepted and written i
 | [private-fields.md](private-fields.md) | `private` record fields, visible only in the declaring module, checker-enforced  | Draft    |
 | [flags-v2.md](flags-v2.md)             | Typed `Flags.Key[T]` declarations over Go's `flag` rules and usage text          | Draft    |
 | [buffer.md](buffer.md)                 | `Buffer`, a mutable byte sequence beside `Bytes`, and binary integer readers     | Draft    |
-| [error.md](error.md)                   | A prelude function `error(message)`; `Result.fail` landed instead                | Declined |
 
 ## Process
 
