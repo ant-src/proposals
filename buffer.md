@@ -249,11 +249,11 @@ and room to grow, and the integer functions are `DataView` calls.
 The nearest alternative is no new type: `Bytes` itself becomes growable and takes `b[i] = x`, as
 Go's `[]byte` does, and the integer writers go on `Bytes`.
 
-It has real merits. There is one type to learn and no conversion between two; about twenty functions
-fewer; no copy when what was built is written out or hashed; and existing programs keep working,
-since an assignment that was an error becomes legal. Most of what immutability is said to buy,
-arrays already do without: an array compares by contents, is a map key under the rule that it is not
-changed afterwards, and is shared between goroutines under section 9.
+It has real merits. There is one type to learn and no conversion between two; about a dozen
+functions fewer; no copy when what was built is written out or hashed; and existing programs keep
+working, since an assignment that was an error becomes legal. Most of what immutability is said to
+buy, arrays already do without: an array compares by contents, is a map key under the rule that it
+is not changed afterwards, and is shared between goroutines under section 9.
 
 What it costs:
 
@@ -270,7 +270,7 @@ What it costs:
 - **No immutable bytes at all.** Go falls back on `string` for that. An Ant string is Unicode text
   and cannot hold arbitrary bytes, so until `frozen.md` lands there would be nothing.
 - **Churn.** Section 4 lists `Bytes` among the immutable kinds, `frozen.md` builds on that, the docs
-  say it on every `Bytes` page, and the host API passes `Bytes` as a Go string type.
+  say so, and the host API passes `Bytes` as a Go string type.
 
 The choice is also not symmetric. Adding `Buffer` leaves `Bytes` and its implementation untouched,
 and `Bytes` can still be made mutable later, compatibly, if two types prove a burden. Mutable
