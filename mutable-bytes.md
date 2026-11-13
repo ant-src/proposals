@@ -26,9 +26,9 @@ func frame(payload: Bytes, key: Bytes): Bytes {
 }
 
 // And back: the length, then that many bytes.
-func payloadOf(frame: Bytes): Bytes {
-  let n = int(frame.read(type(uint32), 0, Bytes.BigEndian{}))
-  frame.slice(4, 4 + n)
+func payloadOf(msg: Bytes): Bytes {
+  let n = int(msg.read(type(uint32), 0, Bytes.BigEndian{}))
+  msg.slice(4, 4 + n)
 }
 ```
 
@@ -100,10 +100,13 @@ as it is today.
 
 ### Functions
 
-New, beside `length`, `concat`, `indexOf`, `startsWith`, `endsWith`, `fromArray` and `toArray`,
-which keep their signatures:
+New, beside `length`, `concat`, `endsWith`, `fromArray` and `toArray`, which keep their signatures,
+and `indexOf` and `startsWith`, which gain an offset:
 
 ```
+Bytes.indexOf(b: Bytes, sub: Bytes, from: int = 0): int | null   // the first index at or after from; panics if from is outside 0 ..= length
+Bytes.startsWith(b: Bytes, prefix: Bytes, at: int = 0): bool     // whether prefix is there at at; panics if at is outside 0 ..= length
+
 Bytes.new(size: int = 0): Bytes                                 // size zero bytes; panics if size < 0 or above 2^31 − 1
 Bytes.clone(b: Bytes): Bytes                                    // a copy
 Bytes.same(a: Bytes, b: Bytes): bool                            // identity
@@ -115,8 +118,13 @@ Bytes.fill(b: Bytes, x: byte, from: int = 0, to: int | null = null): void   // t
 Bytes.copy(dst: Bytes, at: int, src: Bytes, from: int = 0, to: int | null = null): void   // panics unless 0 <= at <= len(dst) and the range fits
 ```
 
-`Bytes.slice` keeps its signature and now copies, as `Array.slice` does. `concat`, `fromArray` and
-`toArray` copy, and `concat` of one part is a new collection.
+`Bytes.slice` keeps its signature and now copies, as `Array.slice` does; its `to` stays required, as
+`Array.slice`'s is, where `fill` and `copy` default it because a whole collection is their common
+case. `concat`, `fromArray` and `toArray` copy, and `concat` of one part is a new collection.
+
+The offsets on `indexOf` and `startsWith` let a parser walk its input without slicing: it finds the
+next delimiter from where it stands, checks a magic number in place, and reads integers with `read`.
+Only what it hands on is sliced.
 
 `extend` appends `src` as it was at the call, so `b.extend(b)` doubles `b`. `truncate(0)` empties a
 collection for reuse, and the bytes it drops are never visible again: growth writes each new byte
@@ -143,7 +151,7 @@ type Order = BigEndian | LittleEndian
 Bytes.read[T: Number](b: Bytes, t: Reflect.Type[T], at: int, order: Bytes.Order): T
 Bytes.write[T: Number](b: Bytes, t: Reflect.Type[T], at: int, x: T, order: Bytes.Order): void   // mutates
 Bytes.append[T: Number](b: Bytes, t: Reflect.Type[T], x: T, order: Bytes.Order): void           // mutates
-Bytes.size[T: Number](t: Reflect.Type[T]): int                  // 1, 2, 4 or 8
+Bytes.sizeOf[T: Number](t: Reflect.Type[T]): int                // 1, 2, 4 or 8
 ```
 
 The kind is passed as a type value, `type(uint32)`, as `Json.decode(text, type(Config))` passes one
@@ -157,12 +165,12 @@ b.write(type(uint16), 4, uint16(port), order)
 b.append(type(float64), 1.5, order)
 ```
 
-`read` takes `Bytes.size(t)` bytes from `at` and panics when `at` or `at + size` is outside
+`read` takes `Bytes.sizeOf(t)` bytes from `at` and panics when `at` or `at + size` is outside
 `0 ..= length`; `write` overwrites them, panics the same way and never grows; `append` adds them at
-the end. `size` lets a parser step past a field: `at += Bytes.size(type(uint32))`. Integers are
-two's complement. A float is written from its IEEE 754 bits and read back into them; whether a NaN
-keeps its payload is not promised, since a backend that holds a float in a JavaScript number may
-canonicalize it.
+the end. `sizeOf` lets a parser step past a field: `at += Bytes.sizeOf(type(uint32))`; it is not
+`size`, so that `b.size()` beside `b.length()` is no trap. Integers are two's complement. A float is
+written from its IEEE 754 bits and read back into them; whether a NaN keeps its payload is not
+promised, since a backend that holds a float in a JavaScript number may canonicalize it.
 
 The checker does the work that thirty separate names would:
 
@@ -181,7 +189,7 @@ The checker does the work that thirty separate names would:
 
   ```ant
   func readAll[T: Number](b: Bytes, t: Reflect.Type[T], at: int, n: int, order: Bytes.Order): Array[T] {
-    Array.range(0, n) | Array.map({ b.read(t, at + x * Bytes.size(t), order) })
+    Array.range(0, n) | Array.map({ b.read(t, at + x * Bytes.sizeOf(t), order) })
   }
   ```
 
@@ -253,8 +261,10 @@ shows that it cannot:
 - `Cmd.read`, `readBytes`, `capture` and `captureBytes` copy a `Bytes` input when the call starts,
   for the same reason: the input is fed by a goroutine of the runtime's, and a cancelled context can
   end the call before that goroutine is done.
-- `Http.Reply`'s `body` is sent after the handler returns and needs no copy: a write into it then
-  can only come from another goroutine, which is a data race already.
+- `Http.Reply`'s `body` is copied when the handler returns, on the handler's goroutine, before the
+  runtime sends it. A program whose handlers fill one `Bytes` under a mutex is synchronized with
+  itself, but not with the runtime's sender, which may still be writing one reply when the next
+  handler refills the bytes.
 
 Each copy runs at memory speed, beside a call bound by the network or a child process.
 
@@ -297,7 +307,10 @@ File.writeBytes("logo.png", r.bytes)              // unchanged
 
 `r.text()` is exactly what `body` held, `String.fromBytesLossy(r.bytes)`, since outside text is
 decoded with U+FFFD for each ill-formed subpart (section 11, String). Nothing is lost and the data
-is held once. A proxy returns `Http.Reply{status: r.status, headers: r.headers, body: r.bytes}`.
+is held once. `r.text()` reads like a field but decodes on every call, so a program that needs the
+text twice binds it once: `let body = r.text()`. A proxy returns
+`Http.Reply{status: r.status, headers: r.headers, body: r.bytes}`, and the runtime copies the body
+as it copies any reply.
 
 The names are chosen for the migration. Every use of the bytes keeps working, and every use of the
 text names a field that is gone, so the checker finds each one. Keeping `body` with the type
@@ -337,7 +350,8 @@ the ordinary index error; and a write that raced with growth may land in the old
 lost.
 
 What changes for programs is that `Bytes` is no longer the type to hand to another goroutine without
-a thought. A program that sends bytes and keeps writing sends `b.clone()`, as it would an array.
+a thought. A program that sends bytes and keeps writing sends `b.clone()`. `clone` is new: an array
+is copied with a spread or `slice`, and `Bytes` has no spread.
 
 ### What becomes of `Array[byte]`
 
@@ -352,7 +366,10 @@ program means what it meant. What changes is cost, two library shapes, one ident
 embedding API:
 
 - **`slice` copies.** A parser that takes `b.slice(i, len(b))` again and again was linear and
-  becomes quadratic. It keeps an offset into the original instead, which `read` takes anyway.
+  becomes quadratic. It keeps an offset into the original instead, which `read`, `indexOf`,
+  `startsWith` and `copy` take. Handing a part to `String.fromBytes`, `File.writeChunk` or a
+  `Crypto` function costs a `slice`, one copy, and two for `fromBytes`, which copies again to
+  validate; at memory speed beside the work done on the part, so these keep one signature.
 - **Text conversions copy.** `String.toBytes` and `String.fromBytes` copy once, at memory speed.
 - **HTTP and command output change shape.** `Http.Response` and `Http.Request` lose `body`, and
   `Http.text` is new; `Cmd.Output` loses `stdoutBytes` and `stderrBytes`, and `Cmd.captureBytes` is
@@ -373,7 +390,8 @@ embedding API:
   loses `Bytes`.
 - **Section 5, Expressions.** Index assignment on `Bytes`; `for` over `Bytes` follows the current
   length.
-- **Section 9, Data races.** The paragraph above.
+- **Section 9, Data races.** The paragraph above, and `Bytes` in the implementation note beside
+  arrays.
 - **Section 10, Declaration files.** The new declarations in `prelude.d.ant`, `Bytes.Order` with its
   two records among them.
 - **Section 11.** The `Bytes` section: the type is mutable and shared, the new functions, the
@@ -382,8 +400,8 @@ embedding API:
   name `Bytes` among the kinds compared by identity. The rule that a `mutates` function returns
   `void`, the removed element or whether it changed anything already covers `pop`. `String.toBytes`,
   `fromBytes` and `fromBytesLossy` copy.
-- **Section 12, Dynamic semantics.** The table of Values, index write, `for`, and the table of
-  runtime panics.
+- **Section 12, Dynamic semantics.** `Bytes` moves from the sentence on immutable values to the one
+  on references. The table of Values, index write, `for`, and the table of runtime panics.
 - **`stdlib.md`.** The two ownership rules. `Http.Response`, `Http.Request`, `Cmd.Output` and
   `Cmd.OutputBytes` as above, `Http.text`, `Cmd.captureBytes`, and the paragraphs that say a body
   and an output are kept twice in one copy; the File section's note that reads copy out of the
@@ -391,11 +409,21 @@ embedding API:
 
 ## Implementation
 
-`value.Bytes` follows `value.Array`: an atomic pointer to an immutable header holding a `[]byte`,
-and a mutex taken by the functions that change the length. An operation loads one header and uses it
-for both its bounds check and its access, so a race never turns a checked index into an
-out-of-bounds one; growth publishes a new header, and the old storage lives as long as an operation
-holds it. The integer functions are `encoding/binary` calls.
+`value.Bytes` holds an atomic pointer to a header that owns fixed-capacity storage, an atomic
+length, and a mutex taken by the functions that change the length. `value.Array` publishes a new
+header on every `push`; for bytes that would be an allocation per byte, which a byte-at-a-time
+encoder cannot afford, so only growth publishes a header here:
+
+- `push` writes the byte into spare capacity, then stores the new length. When the storage is full,
+  it copies into storage twice the size, publishes that header, then stores the length.
+- An operation loads the length, then the header. A header is published before the length can pass
+  its old capacity, so the header an operation loads always covers the length it loaded, and a race
+  never turns a checked index into an out-of-bounds one. The old storage lives as long as an
+  operation holds it.
+- `truncate` and `pop` store a smaller length and keep the storage.
+
+The prototype measures this layout against one header per change. The integer functions are
+`encoding/binary` calls.
 
 What needs care:
 
@@ -488,10 +516,15 @@ functions are `DataView` calls.
 
 ## Fit with other proposals
 
-- **`frozen.md`.** It lists `Bytes` among the kinds that are immutable already, so that
-  `Frozen[Bytes]` is `Bytes`. That line changes: `freeze(b)` of a `Bytes` is a copy whose writes
-  panic, as for an array, and `Frozen[Bytes]` is how a program says that bytes will not change. It
-  also gives back the immutable bytes this proposal takes away.
+- **`frozen.md`.** It builds on immutable `Bytes` in five places: the `Bytes` decision as precedent
+  (line 41), the fit table (115–116), `freeze` returning `Bytes` unchanged (141), `Frozen[Bytes]`
+  being `Bytes` (208), and the alternatives (343). Each changes the same way: `Bytes` is a mutable
+  kind, `freeze(b)` is a copy whose writes panic, as for an array, and `Frozen[Bytes]` is how a
+  program says that bytes will not change. If `frozen.md` is accepted, it gives back the immutable
+  bytes this proposal takes away. If it is not, nothing here depends on it: programs share `Bytes`
+  as they share arrays, and `clone` what they hand on.
+- **`ui.md`.** It lists `Bytes` among the values that cross between server and client. A mutable
+  `Bytes` crosses as a copy, as an array does, so nothing changes there.
 - **`typed-data.md`.** `Type.Data` keeps `Bytes`, now mutable, as it keeps arrays, and a decoder
   gives new `Bytes`. Its examples that decode an HTTP body, `Json.decode(r.body, …)`, become
   `Json.decode(r.text(), …)`.
