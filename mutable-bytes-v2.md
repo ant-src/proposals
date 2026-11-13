@@ -167,12 +167,12 @@ let height = b.uint32(20, order)
 
 When the language gains enums, `Bytes.Order` becomes one, and calls change only in spelling.
 
-These are `buffer.md`'s functions on the one type. A reader takes the bytes from `at` and panics
-when `at` or `at + size` is outside `0 ..= length`; `set` panics the same way and never grows;
-`push` appends. The value's type carries the width, so `b.pushUint32(uint32(n))` panics in the
-conversion when `n` does not fit. Thirty names, and the generic `pushNumber` that would replace
-twenty of them is rejected for the reason `buffer.md` gives: the width would follow whatever type
-the argument happens to have.
+These are `buffer.md`'s functions on the one type, with the order spelled out. A reader takes the
+bytes from `at` and panics when `at` or `at + size` is outside `0 ..= length`; `set` panics the same
+way and never grows; `push` appends. The value's type carries the width, so
+`b.pushUint32(uint32(n), order)` panics in the conversion when `n` does not fit. Thirty names, and
+the generic `pushNumber` that would replace twenty of them is rejected for the reason `buffer.md`
+gives: the width would follow whatever type the argument happens to have.
 
 A float is written from its IEEE 754 bits and read back into them. Whether a NaN keeps its payload
 is not promised, since a backend that holds a float in a JavaScript number may canonicalize it.
