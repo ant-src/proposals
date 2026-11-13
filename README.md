@@ -12,8 +12,6 @@ touches. Nothing here is part of the language until it is accepted and written i
 | [typed-data.md](typed-data.md)         | `Type.Data`, `Type.build`, hooks and `Json.decode`, on top of `reflection.md`    | Draft    |
 | [annotations.md](annotations.md)       | Typed `@` annotations on record fields, read through `Reflect`                   | Draft    |
 | [private-fields.md](private-fields.md) | `private` record fields, visible only in the declaring module, checker-enforced  | Draft    |
-| [flags.md](flags.md)                   | A typed `Flags` library: parsing, help and shell completion from one declaration | Draft    |
-| [flag.md](flag.md)                     | A lightweight `Flag` namespace: Go's `flag` rules, typed by each flag's default  | Draft    |
 | [flags-v2.md](flags-v2.md)             | Typed `Flags.Key[T]` declarations over Go's `flag` rules and usage text          | Draft    |
 | [buffer.md](buffer.md)                 | `Buffer`, a mutable byte sequence beside `Bytes`, and binary integer readers     | Draft    |
 | [error.md](error.md)                   | A prelude function `error(message)`; `Result.fail` landed instead                | Declined |

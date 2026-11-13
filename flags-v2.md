@@ -281,5 +281,3 @@ let jobs = cli.option("jobs", Flags.int, String.toInt(Os.env("JOBS") ?? "") ?? 4
    named `h`? Go says no; this follows Go.
 3. **Freezing.** A declaration after a parse panics here. `flags.md` let later declarations affect
    later parses; no use for that is known.
-4. **The two drafts.** If this one is accepted, `flag.md` and `flags.md` are declined with a line
-   each pointing here.
