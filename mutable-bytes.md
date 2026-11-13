@@ -422,8 +422,7 @@ encoder cannot afford, so only growth publishes a header here:
   operation holds it.
 - `truncate` and `pop` store a smaller length and keep the storage.
 
-The prototype measures this layout against one header per change. The integer functions are
-`encoding/binary` calls.
+The integer functions are `encoding/binary` calls.
 
 What needs care:
 
@@ -442,10 +441,27 @@ What needs care:
 - **Tools.** The debugger's inspector, the host API's table of Go types, and the docs. Highlighting
   does not change.
 
-Expected, not yet measured: the building programs at about 1 to 2 bytes per byte, the one-byte
-change in constant time, and a `uint32` read several times faster as one call. A prototype that
-reruns the table, and measures the new copies in `slice` and the text conversions, comes before
-acceptance.
+A prototype (ant branch `proto/mutable-bytes`, programs in `private/bench/bytes`) reran the table on
+the same machine, the median of three runs:
+
+| Program                                   | Master         | Prototype     |
+| ----------------------------------------- | -------------- | ------------- |
+| The loop, for scale                       | 0.42 s, 21 MB  | 0.43 s, 21 MB |
+| Encode 4 MB a byte at a time, `push`      | 0.98 s, 249 MB | 0.76 s, 29 MB |
+| Mask 4 MB with a key, `b[i] = x`          | 0.90 s, 301 MB | 0.66 s, 26 MB |
+| Read a million `uint32`, `read`           | 0.57 s, 256 MB | 0.25 s, 26 MB |
+| Change one byte of 1 MB, 200 times        | 3.46 s, 151 MB | 0.00 s, 13 MB |
+| A 1 KB `slice` of 1 MB, 100 000 times     | 0.06 s, 84 MB  | 0.07 s, 79 MB |
+| 1 MB `toBytes` and `fromBytes`, 200 times | 0.06 s, 15 MB  | 0.08 s, 23 MB |
+
+Building holds about 2 bytes per byte at its peak, the doubling's slack, where it held 65 to 90; a
+one-byte change is constant time; a `uint32` is read twice as fast as one call. Time falls by a
+quarter rather than to the bare loop's, since a call to `push` costs the interpreter more than the
+loop's addition. The new copies cost little: a slice copies 1 KB at memory speed, and the text
+conversions add a few milliseconds per hundred megabytes. One header per `push`, as `value.Array`
+publishes, took 0.80 s against 0.76 s for the atomic length, with the same memory; the atomic length
+is kept, by a small margin. The master figures for reading include building its input with
+`Bytes.fromArray`, since master has no `Bytes.new`.
 
 For the JavaScript backend `Bytes` is a `Uint8Array` with a length and room to grow, and the integer
 functions are `DataView` calls.
