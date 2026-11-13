@@ -1,13 +1,14 @@
 # Proposal: mutable `Bytes`
 
-2026-11-13 · draft 2, revised after review
+2026-11-13 · draft
 
 ## Summary
 
 Make `Bytes` a mutable, growable sequence of bytes that is shared by reference, as an array is, and
 add functions that read and write fixed-size integers and floats in it. There is still one byte
 type: what I/O gives and takes is what a program computes in. `b[i] = x` writes in place, `push` and
-`extend` grow, and `slice` copies.
+`extend` grow, and `slice` copies. The standard library keeps its signatures, except that an HTTP
+body and a command's output are held once, as `Bytes`, with the text decoded on demand.
 
 ```ant
 // A frame: a big-endian length, then the payload masked with a 4-byte key.
@@ -47,8 +48,7 @@ runs to within a few percent:
 
 Building holds 65 to 90 bytes per byte at its peak; a change in place copies the whole twice; and
 every binary integer is spelled out by hand. A fix needs packed storage that can be written, and
-readers and writers for integers. Where the packed storage lives is the question this proposal
-answers differently.
+readers and writers for integers.
 
 ## Prior art
 
@@ -156,7 +156,9 @@ b.append(type(float64), 1.5, order)
 `read` takes `Bytes.size(t)` bytes from `at` and panics when `at` or `at + size` is outside
 `0 ..= length`; `write` overwrites them, panics the same way and never grows; `append` adds them at
 the end. `size` lets a parser step past a field: `at += Bytes.size(type(uint32))`. Integers are
-two's complement. A float is written from its IEEE 754 bits and read back into them.
+two's complement. A float is written from its IEEE 754 bits and read back into them; whether a NaN
+keeps its payload is not promised, since a backend that holds a float in a JavaScript number may
+canonicalize it.
 
 The checker does the work that thirty separate names would:
 
@@ -193,9 +195,6 @@ gains enums, `Bytes.Order` becomes one, and calls change only in spelling.
 The names follow Go's `binary.Read`, `Write` and `Append` and Zig's `readInt` and `writeInt`. `push`
 is the one-byte append, and Ant has no overloading; `get` would suggest `Array.get`, which returns
 `null` out of range where `read` panics.
-
-Whether a NaN keeps its payload is not promised, since a backend that holds a float in a JavaScript
-number may canonicalize it.
 
 ### Strings
 
@@ -301,12 +300,12 @@ between the two other than these.
 
 ## Compatibility
 
-No existing program writes into `Bytes`, so every program means what it meant. What changes is cost
-and the embedding API:
+No existing program writes into `Bytes`, so apart from the HTTP and command records below, every
+program means what it meant. What changes is cost, two library shapes, one identity rule and the
+embedding API:
 
 - **`slice` copies.** A parser that takes `b.slice(i, len(b))` again and again was linear and
-  becomes quadratic. It keeps an offset into the original instead, which the integer readers take
-  anyway.
+  becomes quadratic. It keeps an offset into the original instead, which `read` takes anyway.
 - **Text conversions copy.** `String.toBytes` and `String.fromBytes` copy once, at memory speed.
 - **HTTP and command output change shape.** `Http.Response` and `Http.Request` lose the text `body`
   and the `bytes` field, and gain `body: Bytes` and `Http.text`; `Cmd.Output` loses its text fields,
@@ -314,21 +313,27 @@ and the embedding API:
   finds every one: `Json.parse(r.body)` no longer checks, since `body` is `Bytes`, and `r.bytes` and
   `out.stdoutBytes` name no field. An unchecked program panics at the same places. The docs' `Http`
   and `Cmd` examples change with them.
+- **`Reflect.same` on `Bytes`.** It falls back to `==` for `Bytes` today, so two equal collections
+  are the same; now it reports identity. A program that relied on it compares with `==`.
 - **The host API.** `Bytes` is passed to Go as a string type today and becomes a type of its own.
   Host constructors copy, and a constructor that adopts a caller's `[]byte` is explicit about it.
 
 ## Spec changes
 
-- **Section 4, Types.** `Bytes` moves from the immutable kinds to the mutable ones; the sentence
-  "Strings, `Bytes`, time values, and …" loses `Bytes`.
+- **Section 4, Types.** `Bytes` is described as mutable and shared where it is introduced, and moves
+  from the immutable kinds to the mutable ones: the sentence "Strings, `Bytes`, time values, and …"
+  loses `Bytes`.
 - **Section 5, Expressions.** Index assignment on `Bytes`; `for` over `Bytes` follows the current
   length.
 - **Section 9, Data races.** The paragraph above.
+- **Section 10, Declaration files.** The new declarations in `prelude.d.ant`, `Bytes.Order` with its
+  two records among them.
 - **Section 11.** The `Bytes` section: the type is mutable and shared, the new functions, the
   integer functions, the sentence on building an `Array[byte]` replaced, the last paragraph on not
-  copying removed. `Bytes.same` beside `Array.same`; `Reflect.same` covers `Bytes`. The rule that a
-  `mutates` function returns `void`, the removed element or whether it changed anything already
-  covers `pop`. `String.toBytes`, `fromBytes` and `fromBytesLossy` copy.
+  copying removed. `Bytes.same` beside `Array.same`; `Reflect.same`'s comment and Reflect's text
+  name `Bytes` among the kinds compared by identity. The rule that a `mutates` function returns
+  `void`, the removed element or whether it changed anything already covers `pop`. `String.toBytes`,
+  `fromBytes` and `fromBytesLossy` copy.
 - **Section 12, Dynamic semantics.** The table of Values, index write, `for`, and the table of
   runtime panics.
 - **`stdlib.md`.** The two ownership rules. `Http.Response`, `Http.Request` and `Cmd.Output` as
@@ -352,6 +357,8 @@ What needs care:
   becomes one copy, validated after copying.
 - **Scratch storage.** `internal/lib/file.go` makes `Bytes` from a reused scratch slice, which is a
   copy today only because `Bytes` is a Go string. It copies explicitly.
+- **HTTP and commands.** `Response`, `Request` and `Output` lose their text fields; `Http.text`
+  decodes on each call, as reading the field did once.
 - **Tools.** The debugger's inspector, the host API's table of Go types, and the docs. Highlighting
   does not change.
 
@@ -414,6 +421,11 @@ functions are `DataView` calls.
   shorter by `type(...)` and needs no type value, but there are thirty names, ten doc pages per
   operation, and code generic over widths has to switch on them. It also puts no `Reflect.Type` in a
   core signature, which the chosen form is the first to do outside the Reflect section.
+- **Keep text and bytes both in `Response`, `Request` and `Output`.** No program changes, but every
+  body and output is held twice, since mutable bytes cannot share memory with a string. Copy on
+  write for these fields alone would avoid that with the machinery rejected above. Dropping the
+  bytes and asking for them in the request decides too early: a program learns from `Content-Type`
+  which it wants.
 - **A clamping `copy`.** Go's `copy` copies `min` of the two lengths and returns the count. Ant
   panics on bounds everywhere else, and a returned count needs a fourth case in the `mutates` rule.
 
@@ -423,7 +435,9 @@ functions are `DataView` calls.
   `Frozen[Bytes]` is `Bytes`. That line changes: `freeze(b)` of a `Bytes` is a copy whose writes
   panic, as for an array, and `Frozen[Bytes]` is how a program says that bytes will not change. It
   also gives back the immutable bytes this proposal takes away.
-- **`typed-data.md`.** `Type.Data` keeps `Bytes`, now mutable, as it keeps arrays.
+- **`typed-data.md`.** `Type.Data` keeps `Bytes`, now mutable, as it keeps arrays, and a decoder
+  gives new `Bytes`. Its examples that decode an HTTP body, `Json.decode(r.body, …)`, become
+  `Json.decode(r.text(), …)`.
 
 ## Open questions
 
