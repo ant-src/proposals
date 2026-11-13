@@ -4,17 +4,6 @@ Design proposals for [Ant](https://github.com/ant-src/spec). A proposal describe
 reaches the specification: the problem, prior art, the proposed API, and the spec sections it
 touches. Nothing here is part of the language until it is accepted and written into the spec.
 
-| Proposal                               | Summary                                                                          | Status   |
-| -------------------------------------- | -------------------------------------------------------------------------------- | -------- |
-| [ui.md](ui.md)                         | A client framework and server components on `Html`                               | Sketch   |
-| [frozen.md](frozen.md)                 | `freeze` and `Frozen[T]`: deep immutable copies, enforced at run time            | Draft    |
-| [coverage.md](coverage.md)             | Statement and branch coverage for `ant test` and `ant run`, in LCOV              | Draft    |
-| [typed-data.md](typed-data.md)         | `Type.Data`, `Type.build`, hooks and `Json.decode`, on top of `reflection.md`    | Draft    |
-| [annotations.md](annotations.md)       | Typed `@` annotations on record fields, read through `Reflect`                   | Draft    |
-| [private-fields.md](private-fields.md) | `private` record fields, visible only in the declaring module, checker-enforced  | Draft    |
-| [flags-v2.md](flags-v2.md)             | Typed `Flags.Key[T]` declarations over Go's `flag` rules and usage text          | Draft    |
-| [buffer.md](buffer.md)                 | `Buffer`, a mutable byte sequence beside `Bytes`, and binary integer readers     | Draft    |
-
 ## Process
 
 1. Write `<name>.md` with a summary, motivation, prior art, the proposed API and semantics, the spec
