@@ -13,7 +13,7 @@ type: what I/O gives and takes is what a program computes in. `b[i] = x` writes 
 // A frame: a big-endian length, then the payload masked with a 4-byte key.
 func frame(payload: Bytes, key: Bytes): Bytes {
   let b = Bytes.new()
-  b.pushUint32(uint32(len(payload)), Bytes.BigEndian{})
+  b.append(type(uint32), uint32(len(payload)), Bytes.BigEndian{})
   b.extend(payload)
   var i = 4
   while i < len(b) {
@@ -25,15 +25,16 @@ func frame(payload: Bytes, key: Bytes): Bytes {
 
 // And back: the length, then that many bytes.
 func payloadOf(frame: Bytes): Bytes {
-  let n = int(frame.uint32(0, Bytes.BigEndian{}))
+  let n = int(frame.read(type(uint32), 0, Bytes.BigEndian{}))
   frame.slice(4, 4 + n)
 }
 ```
 
 This is the alternative that `buffer.md` describes and sets aside. The two proposals share their
-motivation and their integer functions, and differ in the type: `buffer.md` adds `Buffer` beside an
-immutable `Bytes`, and this one makes `Bytes` the mutable type. The section Against `Buffer` says
-why.
+motivation and differ in the type: `buffer.md` adds `Buffer` beside an immutable `Bytes`, and this
+one makes `Bytes` the mutable type. The section Against `Buffer` says why. They also differ in the
+integer functions: `buffer.md` names one per kind, and this one has three that take the kind as a
+type value.
 
 ## Motivation
 
@@ -140,42 +141,66 @@ assert(b == Bytes.fromArray([1, 1, 2, 3]))
 ```
 type Order = BigEndian | LittleEndian
 
-Bytes.uint8(b: Bytes, at: int): uint8
-Bytes.uint16(b: Bytes, at: int, order: Bytes.Order): uint16
-Bytes.uint32(b: Bytes, at: int, order: Bytes.Order): uint32
-Bytes.uint64(b: Bytes, at: int, order: Bytes.Order): uint64
-Bytes.int8 … Bytes.int64                                         // two's complement
-Bytes.float32(b: Bytes, at: int, order: Bytes.Order): float32    // IEEE 754
-Bytes.float64(b: Bytes, at: int, order: Bytes.Order): float64
-
-Bytes.pushUint16(b: Bytes, v: uint16, order: Bytes.Order): void          // appends 2 bytes
-Bytes.setUint16(b: Bytes, at: int, v: uint16, order: Bytes.Order): void  // overwrites 2 bytes
-…                                                                // push and set for each of the ten kinds
+Bytes.read[T: Number](b: Bytes, t: Reflect.Type[T], at: int, order: Bytes.Order): T
+Bytes.write[T: Number](b: Bytes, t: Reflect.Type[T], at: int, x: T, order: Bytes.Order): void   // mutates
+Bytes.append[T: Number](b: Bytes, t: Reflect.Type[T], x: T, order: Bytes.Order): void           // mutates
+Bytes.size[T: Number](t: Reflect.Type[T]): int                  // 1, 2, 4 or 8
 ```
 
-`Bytes.BigEndian` and `Bytes.LittleEndian` are empty records, and `Bytes.Order` is their union, as
-`Time.RoundingMode` is a union of `Time.HalfExpand` and the other modes. The order is required, as
-in Go's `binary.BigEndian.Uint32`: every call says which order it reads, and no reader of the code
-has to remember a default. A one-byte function takes none. A format names its order once and passes
-it along:
+The kind is passed as a type value, `type(uint32)`, as `Json.decode(text, type(Config))` passes one
+in `typed-data.md`, and the result has that type:
 
 ```ant
 let order = Bytes.LittleEndian{}
-let width = b.uint32(16, order)
-let height = b.uint32(20, order)
+let width = b.read(type(uint32), 16, order)              // a uint32
+let height = b.read(type(uint32), 20, order)
+b.write(type(uint16), 4, uint16(port), order)
+b.append(type(float64), 1.5, order)
 ```
 
-When the language gains enums, `Bytes.Order` becomes one, and calls change only in spelling.
+`read` takes `Bytes.size(t)` bytes from `at` and panics when `at` or `at + size` is outside
+`0 ..= length`; `write` overwrites them, panics the same way and never grows; `append` adds them at
+the end. `size` lets a parser step past a field: `at += Bytes.size(type(uint32))`. Integers are
+two's complement. A float is written from its IEEE 754 bits and read back into them.
 
-These are `buffer.md`'s functions on the one type, with the order spelled out. A reader takes the
-bytes from `at` and panics when `at` or `at + size` is outside `0 ..= length`; `set` panics the same
-way and never grows; `push` appends. The value's type carries the width, so
-`b.pushUint32(uint32(n), order)` panics in the conversion when `n` does not fit. Thirty names, and
-the generic `pushNumber` that would replace twenty of them is rejected for the reason `buffer.md`
-gives: the width would follow whatever type the argument happens to have.
+The checker does the work that thirty separate names would:
 
-A float is written from its IEEE 754 bits and read back into them. Whether a NaN keeps its payload
-is not promised, since a backend that holds a float in a JavaScript number may canonicalize it.
+- **One kind.** `T` is solved from the type value, and since `Number` is a union, the solution must
+  be a single member of it (section 4, Generics). `type(uint16 | uint32)`, `type(Number)` and a
+  named primitive such as `type(Port)` are compile errors; `type(int)` is `int64` and `type(byte)`
+  is `uint8`.
+- **The width is stated, not inferred.** The type value comes before the value, so it fixes `T` and
+  `x` is checked against it (section 4, Types as values).
+  `b.append(type(uint32), len(payload), order)` is a compile error, since `len` gives an `int`. That
+  is the slip that sank a generic `pushNumber(b, x)` in `buffer.md`, where the width came from
+  whatever type `x` happened to have. Since literals get no help from context, a constant is
+  converted: `uint16(7)`, and the conversion panics when the value does not fit.
+- **Generic code over widths.** A function can take the kind and pass it on, which separate names
+  would turn into a ten-way switch:
+
+  ```ant
+  func readAll[T: Number](b: Bytes, t: Reflect.Type[T], at: int, n: int, order: Bytes.Order): Array[T] {
+    Array.range(0, n) | Array.map({ b.read(t, at + x * Bytes.size(t), order) })
+  }
+  ```
+
+The interpreter does not know `T`, but it does not need to: the type value is an argument, made once
+per `type(...)` expression for the whole run (section 4, Types as values), and the call switches on
+it. In an unchecked program a type value outside `Number` panics.
+
+`Bytes.BigEndian` and `Bytes.LittleEndian` are empty records, and `Bytes.Order` is their union, as
+`Time.RoundingMode` is a union of `Time.HalfExpand` and the other modes. The order is required, as
+in Go's `binary.BigEndian.Uint32` and Zig's `std.mem.readInt(u32, buf, .big)`: every call says which
+order it reads, and no reader of the code has to remember a default. A one-byte kind takes the order
+and ignores it; `b[i]` is the shorter spelling of `b.read(type(byte), i, order)`. When the language
+gains enums, `Bytes.Order` becomes one, and calls change only in spelling.
+
+The names follow Go's `binary.Read`, `Write` and `Append` and Zig's `readInt` and `writeInt`. `push`
+is the one-byte append, and Ant has no overloading; `get` would suggest `Array.get`, which returns
+`null` out of range where `read` panics.
+
+Whether a NaN keeps its payload is not promised, since a backend that holds a float in a JavaScript
+number may canonicalize it.
 
 ### Strings and the standard library
 
@@ -300,8 +325,8 @@ cost it names:
   the language would keep two mutable byte types for good.
 
 What one type buys: nothing to learn twice and no conversion between two; no `toBytes` copy before
-every write, hash or send; one signature per library function without `Bytes | Buffer`; and about
-ten fewer names, since the readers exist once. Go, JavaScript, Java and Kotlin all run their binary
+every write, hash or send; one signature per library function without `Bytes | Buffer`; and four
+integer functions where `buffer.md` has forty. Go, JavaScript, Java and Kotlin all run their binary
 I/O on one mutable type.
 
 ## Other alternatives
@@ -313,7 +338,13 @@ I/O on one mutable type.
   is the most common slice bug in Go and not how Ant's arrays behave.
 - **Byte order as a flag**, `little: bool = false`, as `DataView` has it. It reads badly as a bare
   `true`, and a default hides the order from the call. Separate `uint32le` and `uint32be` functions
-  say it at the call but double the thirty names.
+  say it at the call but double the names.
+- **A function per kind**, `b.uint32(at, order)`, `b.setUint32(at, v, order)` and
+  `b.pushUint32(v, order)`, as `buffer.md` has them and as Java's `ByteBuffer.getInt` and Node's
+  `readUInt32BE` do. Each call is shorter by `type(...)` and needs no type value, but there are
+  thirty names, ten doc pages per operation, and code generic over widths has to switch on them. It
+  also puts no `Reflect.Type` in a core signature, which the chosen form is the first to do outside
+  the Reflect section.
 - **A clamping `copy`.** Go's `copy` copies `min` of the two lengths and returns the count. Ant
   panics on bounds everywhere else, and a returned count needs a fourth case in the `mutates` rule.
 
