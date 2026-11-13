@@ -30,17 +30,12 @@ func payloadOf(frame: Bytes): Bytes {
 }
 ```
 
-This is the alternative that `buffer.md` describes and sets aside. The two proposals share their
-motivation and differ in the type: `buffer.md` adds `Buffer` beside an immutable `Bytes`, and this
-one makes `Bytes` the mutable type. The section Against `Buffer` says why. They also differ in the
-integer functions: `buffer.md` names one per kind, and this one has three that take the kind as a
-type value.
-
 ## Motivation
 
 `Bytes` is immutable, and the spec sends a program that computes bytes to `Array[byte]`: "A program
 that computes bytes one at a time builds an `Array[byte]` and converts it." An array holds a value
-per element. `buffer.md` measured that path on ant master of 2026-11-12, on an Apple M4 Pro:
+per element. Measured on ant master of 2026-11-12, on an Apple M4 Pro, the times the same over three
+runs to within a few percent:
 
 | Program                                                            | Time   | Peak memory |
 | ------------------------------------------------------------------ | ------ | ----------- |
@@ -172,9 +167,9 @@ The checker does the work that thirty separate names would:
 - **The width is stated, not inferred.** The type value comes before the value, so it fixes `T` and
   `x` is checked against it (section 4, Types as values).
   `b.append(type(uint32), len(payload), order)` is a compile error, since `len` gives an `int`. That
-  is the slip that sank a generic `pushNumber(b, x)` in `buffer.md`, where the width came from
-  whatever type `x` happened to have. Since literals get no help from context, a constant is
-  converted: `uint16(7)`, and the conversion panics when the value does not fit.
+  is the slip a generic `pushNumber(b, x)` would let through, with the width taken from whatever
+  type `x` happened to have. Since literals get no help from context, a constant is converted:
+  `uint16(7)`, and the conversion panics when the value does not fit.
 - **Generic code over widths.** A function can take the kind and pass it on, which separate names
   would turn into a ten-way switch:
 
@@ -306,33 +301,37 @@ functions are `DataView` calls.
 - **Capacity.** No `reserve` or `capacity`; `Bytes.new(n)` is the one size hint.
 - **I/O into existing bytes.** No `File.readInto(b)`. That is its own proposal, which has to settle
   partial reads, end of file, cancellation and how long the runtime may hold `b`.
-- **A cursor, a format language, variable-length integers.** As in `buffer.md`.
+- **A cursor.** No read position in `Bytes`. A parser keeps its offset in a variable.
+- **A format language.** No `struct.pack("<IH", …)`. Typed calls say the same and are checked.
+- **Variable-length integers, bit fields.** Written in Ant with `Bits` until a program shows the
+  need.
 
-## Against `Buffer`
+## Alternatives considered
 
-`buffer.md` keeps `Bytes` immutable and adds `Buffer`. Its case is real, and this proposal pays each
-cost it names:
+- **A mutable type beside an immutable `Bytes`**, `Buffer`, as Python's `bytearray` beside `bytes`
+  and Rust's `BytesMut` beside `Bytes`. `Bytes` stays the I/O type, and a program computes in a
+  `Buffer` and converts. It is the nearest alternative, and this proposal pays each cost it avoids:
+  - **Sharing with text.** With `Buffer`, `slice` and the string conversions stay free. Here they
+    copy, and a text body is held twice. Copy on write would avoid that, at the price of a runtime
+    invariant that memory a string shares is never written. This proposal takes the copies: they are
+    linear, at memory speed, and visible in the spec, where copy on write is hidden machinery.
+  - **Values nobody else can change.** A digest, a key, or bytes sent to another goroutine are safe
+    today without a copy. Here they are in the position of arrays, which Ant already asks programs
+    to handle, under the same section 9 and the same map-key rule.
+  - **Reversibility.** Adding `Buffer` leaves `Bytes` free to become mutable later, and mutable
+    `Bytes` cannot become immutable again. But `Buffer` cannot be taken away once programs use it
+    either: if `Bytes` later became mutable, the language would keep two mutable byte types for
+    good.
 
-- **Sharing with text.** `Buffer` keeps `slice` and the string conversions free. Here they copy, and
-  a text body is held twice. Copy on write would avoid that, at the price of a runtime invariant
-  that memory a string shares is never written. This proposal takes the copies: they are linear, at
-  memory speed, and visible in the spec, where copy on write is hidden machinery.
-- **Values nobody else can change.** A digest, a key, or bytes sent to another goroutine are safe
-  today without a copy. Here they are in the position of arrays, which Ant already asks programs to
-  handle, under the same section 9 and the same map-key rule.
-- **Reversibility.** `buffer.md` says adding `Buffer` can be revisited and mutable `Bytes` cannot.
-  But `Buffer` cannot be taken away once programs use it either: if `Bytes` later became mutable,
-  the language would keep two mutable byte types for good.
+  What one type buys: nothing to learn twice and no conversion between two; no `toBytes` copy before
+  every write, hash or send; one signature per library function without `Bytes | Buffer`; and the
+  integer functions on one type, not two. Go, JavaScript, Java and Kotlin all run their binary I/O
+  on one mutable type.
 
-What one type buys: nothing to learn twice and no conversion between two; no `toBytes` copy before
-every write, hash or send; one signature per library function without `Bytes | Buffer`; and four
-integer functions where `buffer.md` has forty. Go, JavaScript, Java and Kotlin all run their binary
-I/O on one mutable type.
-
-## Other alternatives
-
-- **Store `Array[byte]` compactly.** Rejected as in `buffer.md`: the interpreter never knows `T`, so
-  every `Array` function would gain a second path.
+- **Store `Array[byte]` compactly.** No new behavior, and existing programs get cheaper. But the
+  interpreter never knows `T`, so an array would switch representation on what is stored in it, and
+  every `Array` function would gain a second path: hidden machinery in the part of the runtime meant
+  to stay simple.
 - **Go's slice semantics.** A `Bytes` as a value whose length is its own, with `slice` sharing
   storage. It keeps slicing free, but `push` on one alias may or may not show through another, which
   is the most common slice bug in Go and not how Ant's arrays behave.
@@ -340,11 +339,10 @@ I/O on one mutable type.
   `true`, and a default hides the order from the call. Separate `uint32le` and `uint32be` functions
   say it at the call but double the names.
 - **A function per kind**, `b.uint32(at, order)`, `b.setUint32(at, v, order)` and
-  `b.pushUint32(v, order)`, as `buffer.md` has them and as Java's `ByteBuffer.getInt` and Node's
-  `readUInt32BE` do. Each call is shorter by `type(...)` and needs no type value, but there are
-  thirty names, ten doc pages per operation, and code generic over widths has to switch on them. It
-  also puts no `Reflect.Type` in a core signature, which the chosen form is the first to do outside
-  the Reflect section.
+  `b.pushUint32(v, order)`, as Java's `ByteBuffer.getInt` and Node's `readUInt32BE` do. Each call is
+  shorter by `type(...)` and needs no type value, but there are thirty names, ten doc pages per
+  operation, and code generic over widths has to switch on them. It also puts no `Reflect.Type` in a
+  core signature, which the chosen form is the first to do outside the Reflect section.
 - **A clamping `copy`.** Go's `copy` copies `min` of the two lengths and returns the count. Ant
   panics on bounds everywhere else, and a returned count needs a fourth case in the `mutates` rule.
 
@@ -355,7 +353,6 @@ I/O on one mutable type.
   panic, as for an array, and `Frozen[Bytes]` is how a program says that bytes will not change. It
   also gives back the immutable bytes this proposal takes away.
 - **`typed-data.md`.** `Type.Data` keeps `Bytes`, now mutable, as it keeps arrays.
-- **`buffer.md`.** The competing proposal; one of the two is taken.
 
 ## Open questions
 
