@@ -220,7 +220,7 @@ may change what.
 collection that nothing else holds, so the caller may write into it:
 
 - `File.readBytes`, `File.readChunk`, `File.readExactly`
-- `Cmd.readBytes`, `Cmd.Output`'s `stdoutBytes` and `stderrBytes`
+- `Cmd.readBytes`, `Cmd.OutputBytes`'s `stdout`
 - `Http.Response`'s and `Http.Request`'s `bytes`
 - `Encoding.fromBase64`, `Encoding.fromHex`
 - `Crypto.sha256` and the other digests and HMACs, `Crypto.randomBytes`
@@ -237,8 +237,8 @@ never writes into it and is done with it when it returns:
 - every `Crypto` input, `Crypto.equal` included
 - `String.fromBytes`, `String.fromBytesLossy`
 - `Bytes.indexOf`, `startsWith`, `endsWith`, `concat`, `toArray`, `read`
-- `input: string | Bytes` of `Cmd.read`, `readBytes` and `capture`; `Http.request`'s and
-  `Http.post`'s `body`
+- `input: string | Bytes` of `Cmd.read`, `readBytes`, `capture` and `captureBytes`; `Http.request`'s
+  and `Http.post`'s `body`
 
 A write from another goroutine during such a call is a data race, under section 9 as for arrays, and
 needs no rule of its own. Where the runtime would hold the bytes past the call, it copies them, or
@@ -249,9 +249,9 @@ shows that it cannot:
   reading a request body after the call returns, errors included, and closes it on a goroutine of
   its own (`net/http`, `RoundTripper`). Without the copy, a program that writes into its bytes right
   after the call returns would race with a goroutine it cannot see.
-- `Cmd.read`, `readBytes` and `capture` copy a `Bytes` input when the call starts, for the same
-  reason: the input is fed by a goroutine of the runtime's, and a cancelled context can end the call
-  before that goroutine is done.
+- `Cmd.read`, `readBytes`, `capture` and `captureBytes` copy a `Bytes` input when the call starts,
+  for the same reason: the input is fed by a goroutine of the runtime's, and a cancelled context can
+  end the call before that goroutine is done.
 - `Http.Reply`'s `body` is sent after the handler returns and needs no copy: a write into it then
   can only come from another goroutine, which is a data race already.
 
@@ -260,11 +260,18 @@ Each copy runs at memory speed, beside a call bound by the network or a child pr
 This is Go's `io.Writer` contract. It does not change the sharing of ordinary assignment and channel
 sends.
 
-**Received data is held once, as bytes, and decoded on demand.** Today an HTTP body and a command's
-output are each there twice, as bytes and as text, and the two share memory when the data is UTF-8.
-Mutable bytes cannot share memory with an immutable string, so keeping both would hold every body
-twice. Instead the record keeps the bytes field it has today and loses the text one, and the text is
-a function:
+**Received data is held once.** Today an HTTP body and a command's output are each there twice, as
+bytes and as text, and the two share memory when the data is UTF-8. Mutable bytes cannot share
+memory with an immutable string, so keeping both would hold everything twice. Each is held once
+instead, in a form chosen by who can choose:
+
+- **An HTTP body is held as bytes and decoded on demand.** Neither side can choose its form in
+  advance: a handler takes whatever was sent, and a client often learns from `Content-Type` what it
+  got. Text can be decoded from bytes, but not bytes from text that was decoded lossily, so the
+  record keeps the bytes field it has today, loses the text one, and the text is a function.
+- **A command's output is held in the form the call asks for.** The program chose the command and
+  knows what it prints, so `capture` splits as `read` already does into `read` and `readBytes`, and
+  as `File.read` and `File.readBytes` do.
 
 ```
 type Response = { status: int, headers: Map[string, string], bytes: Bytes }
@@ -274,7 +281,11 @@ type Reply = { status: int, headers: Map[string, string], body: string | Bytes }
 
 Http.text(r: Http.Response | Http.Request): string   // the bytes decoded as all outside text is: a new string per call
 
-type Output = { status: int, statuses: Array[int], stdoutBytes: Bytes, stderrBytes: Bytes }
+type Output = { status: int, statuses: Array[int], stdout: string, stderr: string }      // stdoutBytes, stderrBytes dropped
+type OutputBytes = { status: int, statuses: Array[int], stdout: Bytes, stderr: string }
+
+Cmd.capture(c: Cmd | Cmd.Pipeline, input: string | Bytes = "", ctx: Context | null = null): Result[Cmd.Output, Error]
+Cmd.captureBytes(c: Cmd | Cmd.Pipeline, input: string | Bytes = "", ctx: Context | null = null): Result[Cmd.OutputBytes, Error]
 ```
 
 ```ant
@@ -293,9 +304,26 @@ text names a field that is gone, so the checker finds each one. Keeping `body` w
 would still check and render `Bytes(...)`, `len(r.body)` would count bytes where it counted code
 points, and `Json.stringify(r.body)` would check and panic.
 
-A command's text has `Cmd.read`, which returns standard output as text; `capture` keeps both streams
-as bytes, and `String.fromBytesLossy(out.stderrBytes)` gives one as text. There is no `Cmd.text`: an
-`Output` has two streams, and a function per stream would be two names for one call.
+```ant
+// Text, as today
+let out = try Cmd.capture(Cmd.new("grep", ["-c", pattern]), text)
+if out.status > 1 { return Result.fail("grep: ${out.stderr.trim()}") }
+
+// Binary output, with the error text
+let png = try Cmd.captureBytes(Cmd.new("convert", ["-", "png:-"]), jpeg)
+if png.status != 0 { return Result.fail("convert: ${png.stderr.trim()}") }
+File.writeBytes("out.png", png.stdout)
+```
+
+`stderr` is text in both records: it is diagnostics that a program reports or tests, as `Cmd.read`
+already treats it when it puts standard error into its `Err`. A program that needs it as bytes
+starts the command with `Cmd.start` and a handle. `captureBytes` gives `stdout` a different type
+under the same name, and the two record types keep that apart for the checker.
+
+Go has neither split: it returns bytes, `Output()` and `ExitError.Stderr`, and converts with
+`string(b)`, which copies and never decodes, since a Go string holds any bytes. An Ant string holds
+valid Unicode only, so the conversion decodes, and the library gives text directly where the program
+can ask for it.
 
 ### Concurrency
 
@@ -326,11 +354,12 @@ embedding API:
   becomes quadratic. It keeps an offset into the original instead, which `read` takes anyway.
 - **Text conversions copy.** `String.toBytes` and `String.fromBytes` copy once, at memory speed.
 - **HTTP and command output change shape.** `Http.Response` and `Http.Request` lose `body`, and
-  `Cmd.Output` loses `stdout` and `stderr`; `Http.text` is new. These are the only breaking changes
-  in the library, and the checker finds every one, since each old use names a field that is gone:
-  `Json.parse(r.body)` becomes `Json.parse(r.text())`, and `out.stdout` becomes
-  `String.fromBytesLossy(out.stdoutBytes)` or a `Cmd.read`. An unchecked program panics at the same
-  places. The docs' `Http` and `Cmd` examples change with them.
+  `Http.text` is new; `Cmd.Output` loses `stdoutBytes` and `stderrBytes`, and `Cmd.captureBytes` is
+  new. These are the only breaking changes in the library, and the checker finds every one, since
+  each old use names a field that is gone: `Json.parse(r.body)` becomes `Json.parse(r.text())`, and
+  `out.stdoutBytes` becomes `out.stdout` of a `captureBytes`. A text use of `capture`, the common
+  one, does not change. An unchecked program panics at the same places. The docs' `Http` and `Cmd`
+  examples change with them.
 - **`Reflect.same` on `Bytes`.** It falls back to `==` for `Bytes` today, so two equal collections
   are the same; now it reports identity. A program that relied on it compares with `==`.
 - **The host API.** `Bytes` is passed to Go as a string type today and becomes a type of its own.
@@ -354,9 +383,10 @@ embedding API:
   `fromBytes` and `fromBytesLossy` copy.
 - **Section 12, Dynamic semantics.** The table of Values, index write, `for`, and the table of
   runtime panics.
-- **`stdlib.md`.** The two ownership rules. `Http.Response`, `Http.Request` and `Cmd.Output` as
-  above, `Http.text`, and the paragraphs that say a body and an output are kept twice in one copy;
-  the File section's note that reads copy out of the handle's buffer.
+- **`stdlib.md`.** The two ownership rules. `Http.Response`, `Http.Request`, `Cmd.Output` and
+  `Cmd.OutputBytes` as above, `Http.text`, `Cmd.captureBytes`, and the paragraphs that say a body
+  and an output are kept twice in one copy; the File section's note that reads copy out of the
+  handle's buffer.
 
 ## Implementation
 
@@ -375,10 +405,11 @@ What needs care:
   becomes one copy, validated after copying.
 - **Scratch storage.** `internal/lib/file.go` makes `Bytes` from a reused scratch slice, which is a
   copy today only because `Bytes` is a Go string. It copies explicitly.
-- **HTTP and commands.** `Response`, `Request` and `Output` lose their text fields; `Http.text`
-  decodes on each call, as reading the field did once. The client and `Cmd` copy a `Bytes` input
-  into Go storage before handing it to `net/http` or `os/exec`, so no goroutine of theirs reads the
-  program's bytes after the call returns.
+- **HTTP and commands.** `Response` and `Request` lose their text field, and `Http.text` decodes on
+  each call, as reading the field did once. `capture` decodes its output once, and `captureBytes`
+  decodes only standard error. The client and `Cmd` copy a `Bytes` input into Go storage before
+  handing it to `net/http` or `os/exec`, so no goroutine of theirs reads the program's bytes after
+  the call returns.
 - **Tools.** The debugger's inspector, the host API's table of Go types, and the docs. Highlighting
   does not change.
 
@@ -446,6 +477,11 @@ functions are `DataView` calls.
   write for these fields alone would avoid that with the machinery rejected above. Dropping the
   bytes and asking for them in the request decides too early: a program learns from `Content-Type`
   which it wants.
+- **Bytes everywhere, and a short decode**, `Bytes.text(b)`, as Go returns bytes and converts with
+  `string(b)`. `Cmd` would gain no function and `Http.text` would go: `out.stderrBytes.text()`,
+  `r.bytes.text()`. But the common use of `capture` is text, and every one of them would change, for
+  one more name that does what `String.fromBytesLossy` does. Ant already pairs text and bytes in
+  `File` and `Cmd.read`, and `capture` follows them.
 - **A clamping `copy`.** Go's `copy` copies `min` of the two lengths and returns the count. Ant
   panics on bounds everywhere else, and a returned count needs a fourth case in the `mutates` rule.
 
