@@ -13,7 +13,7 @@ type: what I/O gives and takes is what a program computes in. `b[i] = x` writes 
 // A frame: a big-endian length, then the payload masked with a 4-byte key.
 func frame(payload: Bytes, key: Bytes): Bytes {
   let b = Bytes.new()
-  b.pushUint32(uint32(len(payload)))
+  b.pushUint32(uint32(len(payload)), Bytes.BigEndian{})
   b.extend(payload)
   var i = 4
   while i < len(b) {
@@ -25,7 +25,7 @@ func frame(payload: Bytes, key: Bytes): Bytes {
 
 // And back: the length, then that many bytes.
 func payloadOf(frame: Bytes): Bytes {
-  let n = int(frame.uint32(0))
+  let n = int(frame.uint32(0, Bytes.BigEndian{}))
   frame.slice(4, 4 + n)
 }
 ```
@@ -138,25 +138,41 @@ assert(b == Bytes.fromArray([1, 1, 2, 3]))
 ### Integers and floats
 
 ```
-Bytes.uint8(b: Bytes, at: int): uint8
-Bytes.uint16(b: Bytes, at: int, little: bool = false): uint16
-Bytes.uint32(b: Bytes, at: int, little: bool = false): uint32
-Bytes.uint64(b: Bytes, at: int, little: bool = false): uint64
-Bytes.int8 … Bytes.int64                                         // two's complement
-Bytes.float32(b: Bytes, at: int, little: bool = false): float32  // IEEE 754
-Bytes.float64(b: Bytes, at: int, little: bool = false): float64
+type Order = BigEndian | LittleEndian
 
-Bytes.pushUint16(b: Bytes, v: uint16, little: bool = false): void   // appends 2 bytes
-Bytes.setUint16(b: Bytes, at: int, v: uint16, little: bool = false): void   // overwrites 2 bytes
+Bytes.uint8(b: Bytes, at: int): uint8
+Bytes.uint16(b: Bytes, at: int, order: Bytes.Order): uint16
+Bytes.uint32(b: Bytes, at: int, order: Bytes.Order): uint32
+Bytes.uint64(b: Bytes, at: int, order: Bytes.Order): uint64
+Bytes.int8 … Bytes.int64                                         // two's complement
+Bytes.float32(b: Bytes, at: int, order: Bytes.Order): float32    // IEEE 754
+Bytes.float64(b: Bytes, at: int, order: Bytes.Order): float64
+
+Bytes.pushUint16(b: Bytes, v: uint16, order: Bytes.Order): void          // appends 2 bytes
+Bytes.setUint16(b: Bytes, at: int, v: uint16, order: Bytes.Order): void  // overwrites 2 bytes
 …                                                                // push and set for each of the ten kinds
 ```
 
+`Bytes.BigEndian` and `Bytes.LittleEndian` are empty records, and `Bytes.Order` is their union, as
+`Time.RoundingMode` is a union of `Time.HalfExpand` and the other modes. The order is required, as
+in Go's `binary.BigEndian.Uint32`: every call says which order it reads, and no reader of the code
+has to remember a default. A one-byte function takes none. A format names its order once and passes
+it along:
+
+```ant
+let order = Bytes.LittleEndian{}
+let width = b.uint32(16, order)
+let height = b.uint32(20, order)
+```
+
+When the language gains enums, `Bytes.Order` becomes one, and calls change only in spelling.
+
 These are `buffer.md`'s functions on the one type. A reader takes the bytes from `at` and panics
 when `at` or `at + size` is outside `0 ..= length`; `set` panics the same way and never grows;
-`push` appends. The order is big-endian unless `little` is true. The value's type carries the width,
-so `b.pushUint32(uint32(n))` panics in the conversion when `n` does not fit. Thirty names, and the
-generic `pushNumber` that would replace twenty of them is rejected for the reason `buffer.md` gives:
-the width would follow whatever type the argument happens to have.
+`push` appends. The value's type carries the width, so `b.pushUint32(uint32(n))` panics in the
+conversion when `n` does not fit. Thirty names, and the generic `pushNumber` that would replace
+twenty of them is rejected for the reason `buffer.md` gives: the width would follow whatever type
+the argument happens to have.
 
 A float is written from its IEEE 754 bits and read back into them. Whether a NaN keeps its payload
 is not promised, since a backend that holds a float in a JavaScript number may canonicalize it.
@@ -295,6 +311,9 @@ I/O on one mutable type.
 - **Go's slice semantics.** A `Bytes` as a value whose length is its own, with `slice` sharing
   storage. It keeps slicing free, but `push` on one alias may or may not show through another, which
   is the most common slice bug in Go and not how Ant's arrays behave.
+- **Byte order as a flag**, `little: bool = false`, as `DataView` has it. It reads badly as a bare
+  `true`, and a default hides the order from the call. Separate `uint32le` and `uint32be` functions
+  say it at the call but double the thirty names.
 - **A clamping `copy`.** Go's `copy` copies `min` of the two lengths and returns the count. Ant
   panics on bounds everywhere else, and a returned count needs a fourth case in the `mutates` rule.
 
@@ -312,4 +331,3 @@ I/O on one mutable type.
 1. **Sharing HTTP `body` and `bytes`.** Holding a text body twice may matter for large responses.
    Making one of the two a function, computed on demand, would avoid it at the cost of an API
    change.
-2. **Byte order as a flag.** As in `buffer.md`: `little: bool` reads badly as a bare `true`.
