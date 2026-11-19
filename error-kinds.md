@@ -1,22 +1,24 @@
 # Proposal: error kinds
 
-2026-11-20 - draft
+2026-11-20 - draft, revised: `kind` is an enumeration
 
 ## Summary
 
-`Error` gains a second field, `kind`, a string that says what went wrong in terms a program can
-branch on: `"not-exist"`, `"exist"`, `"permission"`, `"closed"`, or the reason of a context that
-ended the call. It defaults to `""`, so every `Error{ message }` literal still builds one, and
-`Error.wrap` keeps it, so a kind survives the context that callers add.
+`Error` gains a second field, `kind`, an enumeration that says what went wrong in terms a program
+can branch on: `Error.NotExist`, `Error.Exist`, `Error.Permission`, `Error.Closed`, or the reason a
+context ended the call. It defaults to `null`, so every `Error{ message }` literal still builds one,
+and `Error.wrap` keeps it, so a kind survives the context that callers add.
 
 ```ant
-type Error = { message: string, kind: string = "" }
+type Error = { message: string, kind: Error.Kind | null = null }
+type Error.Kind = Error.NotExist | Error.Exist | Error.Permission | Error.Closed
+  | Error.Cancelled | Error.Timeout | Error.Interrupt   // empty records
 ```
 
 ```ant
 let text = File.read(path) | Result.wrapErr("read config")
 if text is Err {
-  if text.error.kind == "not-exist" { return Result.ok(defaults) }
+  if text.error.kind is Error.NotExist { return Result.ok(defaults) }
   return Result.err(text.error)
 }
 ```
@@ -72,42 +74,56 @@ program's own errors. It does not help with the library's, which are all `Error`
   `instanceof`.
 
 Every one of them names the same handful of cases. Go names the fewest, and a kind for each of its
-sentinels covers the scripts above.
+sentinels covers the scripts above. Rust, Python and Deno make the set a type, so a misspelled case
+does not compile; Node's strings do not catch one.
 
 ## Proposal
 
 ### The type
 
 ```ant
-type Error = { message: string, kind: string = "" }
+type Error = { message: string, kind: Error.Kind | null = null }
+
+type Error.Kind = Error.NotExist | Error.Exist | Error.Permission | Error.Closed
+  | Error.Cancelled | Error.Timeout | Error.Interrupt
+
+type Error.NotExist = {}     // and one empty record for each of the others
 ```
 
-`kind` is a string that names the failure for a program to compare, and `""` when it has no kind.
-`Error{ message: "..." }` builds an `Error` of no kind, as before (section 4, Field defaults). Any
-string is a kind: a program may set one on its own errors, with the meaning the library gives it or
-one of its own, as `Error{ message: "no user ${name}", kind: "not-exist" }`.
+`Error.Kind` is a union of empty records, which section 4 calls an enumeration, as `Bytes.Order` is.
+Its members are types in the `Error` namespace, as `Panic.Frame` is in `Panic`'s. `kind` is `null`
+when the failure has none, and `Error{ message: "..." }` builds such an `Error`, as before (section
+4, Field defaults).
+
+A program tests a kind with `is`, which narrows as any field-path test does, and a misspelled kind
+is a compile error. A program may set a kind on an `Error` it builds, with the meaning the library
+gives it, as `Error{ message: "no user ${name}", kind: Error.NotExist{} }`, and may test all of them
+in a chain the checker knows to be complete. It cannot add kinds: an error a program branches on in
+its own terms is a type of its own (section 8), as now.
 
 ### The library's kinds
 
 A standard library `Err` has a kind exactly when the Go error behind it matches one of these:
 
-| `kind`         | When                                                      | Go                                     |
-| -------------- | --------------------------------------------------------- | -------------------------------------- |
-| `"not-exist"`  | the file, directory, or link named does not exist         | `errors.Is(err, fs.ErrNotExist)`       |
-| `"exist"`      | something is already where the call would create          | `errors.Is(err, fs.ErrExist)`          |
-| `"permission"` | the OS denied the operation                               | `errors.Is(err, fs.ErrPermission)`     |
-| `"closed"`     | the handle or connection was closed                       | `fs.ErrClosed`, `net.ErrClosed`        |
-| the reason     | the call gave up because its context was done (section 9) | `context.Canceled`, `DeadlineExceeded` |
+| `kind`                                                | When                                                      | Go                                     |
+| ----------------------------------------------------- | --------------------------------------------------------- | -------------------------------------- |
+| `Error.NotExist`                                      | the file, directory, or link named does not exist         | `errors.Is(err, fs.ErrNotExist)`       |
+| `Error.Exist`                                         | something is already where the call would create          | `errors.Is(err, fs.ErrExist)`          |
+| `Error.Permission`                                    | the OS denied the operation                               | `errors.Is(err, fs.ErrPermission)`     |
+| `Error.Closed`                                        | the handle or connection was closed                       | `fs.ErrClosed`, `net.ErrClosed`        |
+| `Error.Cancelled`, `Error.Timeout`, `Error.Interrupt` | the call gave up because its context was done (section 9) | `context.Canceled`, `DeadlineExceeded` |
 
-The last row's kinds are the context reasons `Context.reason` already returns: `"cancelled"`,
-`"timeout"` and `"interrupt"`. Such an `Err` has the reason as both its message and its kind, so a
-caller tests `r.error.kind == "timeout"` whatever context the message gained on the way up.
+The last row follows the context's reason, which `Context.reason` returns as `"cancelled"`,
+`"timeout"` or `"interrupt"`: such an `Err` has the reason as its message, as now, and the matching
+member as its kind, so a caller tests `r.error.kind is Error.Timeout` whatever context the message
+gained on the way up. `Context.reason` stays a string.
 
-Every other library `Err` has kind `""`: a parse error, a bad argument, a network failure Go has no
-sentinel for, such as a refused connection. The checks Ant makes itself that mirror a Go sentinel
-use its kind: a read of a closed handle is `"closed"`, as Go's `fs.ErrClosed` is, and `File.copyAll`
-into a directory with entries is `"exist"`. Which platform errors count as which is Go's: on
-Windows, as on Unix, a missing file is `"not-exist"` because Go's `errors.Is` says so.
+Every other library `Err` has kind `null`: a parse error, a bad argument, a network failure Go has
+no sentinel for, such as a refused connection. The checks Ant makes itself that mirror a Go sentinel
+use its kind: a read of a closed handle is `Error.Closed`, as Go's `fs.ErrClosed` is, and
+`File.copyAll` into a directory with entries is `Error.Exist`. Which platform errors count as which
+is Go's: on Windows, as on Unix, a missing file is `Error.NotExist` because Go's `errors.Is` says
+so.
 
 ### Wrapping keeps the kind
 
@@ -119,7 +135,7 @@ is `Result.err(Error{ message })`, of no kind. `Result.mapErr` is unchanged: a f
 ```ant
 func loadConfig(path: string): Result[Config, Error] {
   let text = File.read(path) | Result.wrapErr("load ${path}")
-  if text is Err && text.error.kind == "not-exist" {
+  if text is Err && text.error.kind is Error.NotExist {
     return Result.ok(Config{})
   }
   let json = try (Json.parse(try text) | Result.wrapErr("parse ${path}"))
@@ -132,40 +148,46 @@ func loadConfig(path: string): Result[Config, Error] {
 `kind` is an ordinary field, so the rest follows from the rules records already have:
 
 - `String.from` prints it, so `Result.unwrap`'s panic and a printed `Err` show it:
-  `Err{ error: Error{ message: "open a.txt: no such file or directory", kind: "not-exist" } }`.
+  `Err{ error: Error{ message: "open a.txt: no such file or directory", kind: Error.NotExist{} } }`,
+  and `kind: null` for an error of no kind.
 - `==` compares it, so two errors with the same message and different kinds differ.
-- `Json.stringify` writes it, and `Reflect` sees two fields.
+- `Json.stringify` writes a record without its tag, so a kind is written as `{}`: the JSON of an
+  `Error` keeps its message and loses which kind it had (Open questions).
+- `Reflect` sees two fields, the second of a union type.
 - A script that ends with an `Err` of type `Error` still writes only the message (section 10,
   Scripts).
-- Narrowing reads it as any field: `if r is Err && r.error.kind == "permission"`.
+- Narrowing reads it as any field: `if r is Err && r.error.kind is Error.Permission`.
 
 ## Spec changes
 
-- **ant-lang.md, section 8, `Result`.** `Error` is `{ message: string, kind: string = "" }`; one
-  sentence on what a kind is, pointing at stdlib.md for the library's kinds.
+- **ant-lang.md, section 8, `Result`.** `Error` is
+  `{ message: string, kind: Error.Kind | null = null }` and `Error.Kind` its enumeration; one
+  sentence on what a kind is, pointing at stdlib.md for when the library sets each.
 - **ant-lang.md, section 8, Wrapping errors.** `Error.wrap` keeps `kind`. The sentence "A wrapped
   error keeps only text" becomes "keeps its text and its kind", and the remark that an error code
   branches on is a type of its own gains "or, for the library's errors, its `kind`".
-- **ant-lang.md, section 11.** The `Error` type line and the `Error.wrap` comment.
+- **ant-lang.md, section 11.** The `Error` and `Error.Kind` type lines, the seven members, and the
+  `Error.wrap` comment.
 - **stdlib.md, introduction.** The kinds table and the rule that a library `Err` has a kind exactly
   when Go's `errors.Is` matches, next to the paragraph on a waiting function's `Err`, which gains
   "with the reason as its kind as well".
 - **stdlib.md, File and Cmd.** No per-function text: the rule covers them. The `File.exists`
-  paragraph can point to `"not-exist"` for the read-then-check case.
+  paragraph can point to `Error.NotExist` for the read-then-check case.
 
 ## Implementation
 
 Small and central. In `internal/lib`, `errResult(err)` classifies `err` with `errors.Is` against the
-four sentinels and builds the `Error` with its kind; `gaveUp(ctx)` sets the context's reason as the
-kind; the handle errors Ant makes itself (`errClosed`) and `copyAll`'s non-empty check set theirs.
-`value.ErrorValue` takes a kind, and the prelude's `Error` type gains the field with its default.
-`Error.wrap` copies the kind. The checker needs nothing new: a field with a default is already
-optional in a literal.
+four sentinels and builds the `Error` with its kind; `gaveUp(ctx)` sets the member for the context's
+reason; the handle errors Ant makes itself (`errClosed`) and `copyAll`'s non-empty check set theirs.
+`value.ErrorValue` takes a kind, and the prelude declares `Error.Kind` and its members and gives
+`Error` the field with its default. `Error.wrap` copies the kind. The checker needs nothing new: a
+field with a default is already optional in a literal, and `is` already narrows a field path.
 
 The cost is in printed output. Every docs example and test that prints an `Error` record shows the
 new field: about 616 lines on 184 docs pages and 254 lines in `tests/`. Most become
-`Error{ message: "...", kind: "" }`; those that print a missing file or a cancelled context show
-their kind. The change is mechanical, and the docs-update workflow carries it.
+`Error{ message: "...", kind: null }`; those that print a missing file or a cancelled context show
+their kind, as `kind: Error.NotExist{}`. The change is mechanical, and the docs-update workflow
+carries it.
 
 ## Alternatives considered
 
@@ -183,11 +205,16 @@ their kind. The change is mechanical, and the docs-update workflow carries it.
 - **Errno names**, `"ENOENT"` and `"EACCES"` as Node has them. Unix-specific, more of them than a
   program tests, and not what Go exposes; a few kinds that Go defines on every platform are the
   portable subset.
-- **`kind: string | null`, null for none.** Every test of a kind is an `==` against a string, which
-  `""` answers as well as `null`, and `""` keeps the type a plain `string`.
-- **Named constants**, `Error.NOT_EXIST` for `"not-exist"`, so a typo is a compile error. They add a
-  second spelling of each kind. The strings are few and appear in the docs of every function that
-  can return them; see Open questions.
+- **A string**, `kind: string = ""` with `"not-exist"` and the others, as Node's `err.code`.
+  Programs could add kinds of their own, and JSON would keep the kind. But
+  `r.error.kind == "not-exists"` is never true and nothing says so, editors cannot complete a kind,
+  and a chain over the kinds cannot be checked for completeness. The first draft of this proposal
+  had it; the enumeration replaced it because the library's kinds are a closed set, which is what
+  section 4's enumerations are for.
+- **Named constants over a string**, `Error.NOT_EXIST` for `"not-exist"`. A typo in the constant's
+  name is caught, but not one in a string written directly, and each kind has two spellings.
+- **Members named as Rust, Python and Deno name them**, `Error.NotFound`, `Error.AlreadyExists`,
+  `Error.PermissionDenied`. Go's names are kept, since the rule is Go's sentinels.
 
 ## Non-goals
 
@@ -203,14 +230,16 @@ their kind. The change is mechanical, and the docs-update workflow carries it.
 1. **The name.** `kind` (Rust's `ErrorKind`) or `code` (Node's `err.code`). `code` is already the
    word for `ant check`'s diagnostic codes, so `kind` avoids two meanings.
 2. **Printing an error of no kind.** Printing the field in full keeps the record rule that every
-   field prints, at the cost of `kind: ""` in most printed errors. The alternative is a rule that
+   field prints, at the cost of `kind: null` in most printed errors. The alternative is a rule that
    `String.from` leaves out a field that holds its declared default, for every record type, which is
    a larger change to make on its own, if at all.
 3. **A program that is not found.** Go's `exec.ErrNotFound`, for `Cmd.new("nosuch", [])`, is not
-   `fs.ErrNotExist`, so under the rule above it has no kind. A `"not-exist"` there would be
-   convenient and is not what Go says. A separate `"not-found"` is another kind to learn.
-4. **Typos.** `r.error.kind == "not-exists"` is never true and no tool says so. `ant check` could
-   warn when `.kind` of an `Error` is compared with a string that no library function returns; that
-   is a checker rule tied to a library table, and is left out of this proposal.
-5. **`Result.fail` with a kind.** `Result.fail(message, kind: "not-exist")` would save the literal
-   in a program that reuses the library's kinds. Left out until programs need it.
+   `fs.ErrNotExist`, so under the rule above it has no kind. `Error.NotExist` there would be
+   convenient and is not what Go says. A separate `Error.NotFound` is another kind to learn.
+4. **JSON loses the kind.** `Json.stringify` writes every record without its tag, so `kind` is `{}`
+   and a log of errors as JSON cannot tell them apart. The same holds for every enumeration, such as
+   `Bytes.Order`, so the fix, if any, is in `Json.stringify`: writing a member of a union of empty
+   records as its name, `"Error.NotExist"`. That is a change of its own; until then a program writes
+   `String.from(e.kind)`.
+5. **`Result.fail` with a kind.** `Result.fail(message, kind: Error.NotExist{})` would save the
+   literal in a program that reuses the library's kinds. Left out until programs need it.
