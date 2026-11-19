@@ -14,22 +14,24 @@ that is wrong in one run. Four changes, which share one data structure:
    fix the checker is certain of is marked `auto`, and `ant code fix` applies those. The language
    server offers every fix as a quick fix, in place of its message-matching regular expressions.
 3. **Warnings.** A second severity for code that is legal but almost always a bug: a discarded
-   `Result`, an unused import or variable, a named type interpolated as `Month("2026-09")`, and a
-   float converted to `int` where a fraction would panic. Warnings print but leave the exit status
-   0; `-strict` makes them fail. There are no suppression comments: each warning is silenced by
-   writing the intent, such as `_ = f()`.
+   `Result`, an unused import or variable, and a named type interpolated as `Month("2026-09")`.
+   Warnings print but leave the exit status 0; `-strict` makes them fail. There are no suppression
+   comments: each warning is silenced by writing the intent, such as `_ = f()`.
 4. **Every error in one run.** `ant check` parses with the recovering parser the language server
    already uses, reports every syntax error of a file, and type-checks what parsed. An error that
    only follows from an earlier one is not reported.
 
-Nothing changes in `ant run`, and no program that checks today stops checking. `-json` gains fields,
-and loses none.
+Nothing changes in `ant run`, and no program that checks today fails `ant check` without `-strict`.
+Two things a consumer of `ant check` sees do change, and the proposal treats them as breaking
+(Compatibility, below): a program with no error may now print warnings, and `-json` writes objects
+that are not errors.
 
 ## Motivation
 
-[`private/agents/report.md`](../private/agents/report.md) records an agent writing five programs
-(about 1,150 lines) in Ant from the docs alone. Most mistakes took one round trip, because the
-messages are good. The cost was in four places, and this proposal addresses each:
+An agent wrote five programs (about 1,150 lines) in Ant from the docs alone, and recorded every
+failed `ant check`, every bug that only showed up at run time, and every API it had to guess. Most
+mistakes took one round trip, because the messages are good. The cost was in four places, and this
+proposal addresses each:
 
 1. **One error at a time.** 18 runs of `ant check` failed. In 9 of them, a syntax-stage error (a
    reserved word, a prelude name, a nested `func`, a bad escape, a test name that is not a string)
@@ -40,7 +42,7 @@ messages are good. The cost was in four places, and this proposal addresses each
    `String.join(parts: Array[string], sep: string)`, whose first parameter takes the receiver. Six
    of the 18 failures were guessed APIs like this, and a `help` line would have turned each into a
    one-step fix.
-3. **Bugs that check clean.** This program checks with no error and fails silently in three places:
+3. **Bugs that check clean.** This program checks with no error and goes wrong in two places:
 
    ```ant
    type UserId = string
@@ -48,7 +50,6 @@ messages are good. The cost was in four places, and this proposal addresses each
    save("/nonexistent/dir/file")   // the Err is dropped
    let id = UserId("u1")
    println("user ${id}")           // prints: user UserId("u1")
-   println(int(2.5))               // panics: 2.5 has a fraction
    ```
 
    Errors are values in Ant, and dropping one is legal: only a discarded HTML expression is an error
@@ -58,8 +59,8 @@ messages are good. The cost was in four places, and this proposal addresses each
 4. **Tools match messages.** The language server's quick fixes (state an inferred type, add missing
    fields, import a name) find their diagnostics by regular expressions over the message text
    (`internal/lsp/codeaction.go`). Rewording a message silently breaks a quick fix. Any outside tool
-   that wants to act on a diagnostic has the same problem, and `ant code fix` has been waiting for
-   codes for that reason (`private/tools/code.md`).
+   that wants to act on a diagnostic has the same problem, and a `fix` subcommand of `ant code` has
+   been waiting for codes for that reason.
 
 ## Prior art
 
@@ -111,7 +112,8 @@ A diagnostic has:
 The first line keeps its form, `path:line:column: message`, with two additions: a warning's message
 starts with `warning: `, and every line ends with the code in brackets, as mypy prints it. `help`
 and the title of each fix follow the marked source line, and `related` places follow those. The
-count at the end names both severities:
+count at the end names both severities. Everything goes to standard error, as errors do today, so
+standard output stays empty:
 
 ```text
 ledger.ant:33:19: Array[string] has no field or function join [no-member]
@@ -134,15 +136,17 @@ A `related` place prints as `= note: path:line:column: message`.
 
 ### JSON output
 
-`-json` keeps one object per diagnostic and adds the fields above. Warnings are included:
+`-json` keeps one object per diagnostic and adds the fields above. Warnings are included. The span
+is `groups.join`, which the carets mark; the fix replaces the whole call, `groups.join(",")`, so its
+edit ends one column later than the span:
 
 ```json
 {
   "path": "ledger.ant",
   "line": 33,
   "column": 19,
-  "start": { "line": 33, "column": 12 },
-  "end": { "line": 33, "column": 28 },
+  "start": { "line": 33, "column": 13 },
+  "end": { "line": 33, "column": 24 },
   "severity": "error",
   "code": "no-member",
   "message": "Array[string] has no field or function join",
@@ -154,8 +158,8 @@ A `related` place prints as `= note: path:line:column: message`.
       "edits": [
         {
           "path": "ledger.ant",
-          "start": { "line": 33, "column": 12 },
-          "end": { "line": 33, "column": 28 },
+          "start": { "line": 33, "column": 13 },
+          "end": { "line": 33, "column": 29 },
           "text": "String.join(groups, \",\")"
         }
       ]
@@ -172,12 +176,18 @@ A `related` place prints as `= note: path:line:column: message`.
 | `1`    | an error was reported, or under `-strict` a warning                                  |
 | `2`    | a file cannot be loaded (now with all of its errors reported), or the usage is wrong |
 
+A syntax error, a missing module, and a forbidden import still make a file one that cannot be
+loaded, since `ant run` cannot run it, so they keep status `2`. A redeclared prelude name, which no
+longer stops the file (Every error in one run, below), moves from `2` to `1`.
+
 ### Codes
 
 A code names a rule. Several messages may share a code, a message may be reworded without changing
-its code, and a code is never reused for another rule. A new rule gets a new code. The initial
-catalog groups the checker's present messages (about 180 formats in `internal/check` and
-`internal/resolve`, and the parser's) by the rule they enforce:
+its code, and a code is never reused for another rule. A new rule gets a new code. A code may be
+split into finer codes, such as `syntax` into `reserved-word` and others: the old code is then
+retired, listed in the catalog as split, and never reused, so a tool that matched it learns from the
+catalog which codes replaced it. The initial catalog groups the checker's present messages (about
+180 formats in `internal/check` and `internal/resolve`, and the parser's) by the rule they enforce:
 
 | Code                | Rule                                                                                        | Examples of today's messages                                               |
 | ------------------- | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
@@ -212,39 +222,49 @@ catalog groups the checker's present messages (about 180 formats in `internal/ch
 | `reflect`           | `type(...)` used where it cannot be                                                         | type(...) takes a type, not a value                                        |
 | `test`              | a test declaration that is not allowed                                                      | expected the test's name, a string, got identifier "c"                     |
 
-The warnings below add five more. The catalog is part of the spec, so a tool can rely on it.
+The warnings below add four more. The catalog is part of the spec, so a tool can rely on it.
 
 ### Help and fixes
 
 The checker attaches `help` where the message alone does not say what to write, and a fix where the
 edit is clear. The first set, each from a mistake in the agent report:
 
-| Code               | Written                        | Help                                                                                  | Fix                                               | Auto                       |
-| ------------------ | ------------------------------ | ------------------------------------------------------------------------------------- | ------------------------------------------------- | -------------------------- |
-| `no-member`        | `groups.join(",")`             | join is String.join, which takes the array first                                      | `String.join(groups, ",")`                        | yes¹                       |
-| `no-member`        | `Math.mod(l, r)`               | Math has no mod; its functions nearest by name are …                                  |                                                   |                            |
-| `no-member`        | `Result.flatMap(f)`            | Result has no flatMap; chain results with try                                         |                                                   |                            |
-| `arguments`        | `Result.ok()`                  | the expected type is Result[void, Error]: pass void                                   | `Result.ok(void)`                                 | yes                        |
-| `type-mismatch`    | `Map{ [k]: v }`                | a computed key is written in parentheses                                              | `Map{ (k): v }`                                   | yes                        |
-| `syntax`           | `x as Op`                      | Ant has no casts: test the type with is, which narrows a local                        |                                                   |                            |
-| `test`             | `test c[0] { }`                | a test's name is a string; interpolate the value                                      | `test "${c[0]}" { }`                              | yes                        |
-| `syntax`           | `Result.ok({ a, b })`          | a record literal starts with its type's name                                          |                                                   |                            |
-| `type-mismatch`    | `json.value` after `is Map`    | a field path does not narrow; bind it to a local first (related: the test on line 28) |                                                   |                            |
-| `redeclared`       | `type Entry = …`               | Entry is the prelude type Entry[K, V], an entry of a map                              |                                                   |                            |
-| `missing-else`     | a union `if` chain             | the chain does not handle Blue                                                        | an `else if light is Blue` branch                 | no²                        |
-| `needs-annotation` | a binding the checker can type | (as today)                                                                            | the inferred type, as the language server adds it | yes                        |
-| `missing-field`    | a record literal               | (as today)                                                                            | the missing fields, with placeholders             | no²                        |
-| `undefined`        | a name another module exports  | (as today)                                                                            | the import                                        | when one module exports it |
+| Code               | Written                        | Help                                                                                  | Fix                                               | Auto |
+| ------------------ | ------------------------------ | ------------------------------------------------------------------------------------- | ------------------------------------------------- | ---- |
+| `no-member`        | `groups.join(",")`             | join is String.join, which takes the array first                                      | `String.join(groups, ",")`                        | yes¹ |
+| `no-member`        | `Math.mod(l, r)`               | Math has no mod; its functions nearest by name are …                                  |                                                   |      |
+| `no-member`        | `Result.flatMap(f)`            | Result has no flatMap; chain results with try                                         |                                                   |      |
+| `arguments`        | `Result.ok()`                  | the expected type is Result[void, Error]: pass void                                   | `Result.ok(void)`                                 | yes  |
+| `type-mismatch`    | `Map{ [k]: v }`                | a computed key is written in parentheses                                              | `Map{ (k): v }`                                   | no³  |
+| `syntax`           | `x as Op`                      | Ant has no casts: test the type with is, which narrows a local                        |                                                   |      |
+| `test`             | `test c[0] { }`                | a test's name is a string; interpolate the value                                      | `test "${c[0]}" { }`                              | yes  |
+| `syntax`           | `Result.ok({ a, b })`          | a record literal starts with its type's name                                          |                                                   |      |
+| `type-mismatch`    | `json.value` after `is Map`    | a field path does not narrow; bind it to a local first (related: the test on line 28) |                                                   |      |
+| `redeclared`       | `type Entry = …`               | Entry is the prelude type Entry[K, V], an entry of a map                              |                                                   |      |
+| `missing-else`     | a union `if` chain             | the chain does not handle Blue                                                        | an `else if light is Blue` branch                 | no²  |
+| `needs-annotation` | a binding the checker can type | (as today)                                                                            | the inferred type, as the language server adds it | yes  |
+| `missing-field`    | a record literal               | (as today)                                                                            | the missing fields, with placeholders             | no²  |
+| `undefined`        | a name another module exports  | (as today)                                                                            | the import, one fix per module that exports it    | no⁴  |
 
 ¹ When exactly one prelude function in the receiver type's namespaces, or `String`, `Array`, `Map`,
 `Set`, and `Iter`, has the name and takes the receiver first. With more than one, each is a fix and
-none is `auto`. ² A fix with a placeholder is never `auto`.
+none is `auto`. ² A fix with a placeholder is never `auto`. ³ The author may have meant an array key
+in a map of the wrong type. ⁴ A misspelled name can match an export by accident, and an import adds
+a module whose `var` initializers then run (section 10).
 
-A fix is `auto` when it is the only fix offered, it removes the diagnostic, and it leaves every
-behavior that `ant check` already accepted unchanged. The last condition is what keeps `auto` safe
-to apply without reading: stating an inferred type or adding an import changes no behavior, while
-converting `int(x)` to `int(Math.trunc(x))` turns a panic into a value, so it is a fix but not
-`auto`.
+A fix is `auto` only when it is the only fix offered and applying it removes the diagnostic, and in
+addition:
+
+- **For an error,** no other edit could be meant. The program does not check, so there is no
+  behavior to keep; what makes the fix safe to apply unread is that the error admits one repair.
+  `Result.ok()` where `Result[void, Error]` is expected can only mean `Result.ok(void)`, and a
+  `needs-annotation` error can only be answered with the type the checker inferred. A misspelled
+  name that happens to match an export can mean many things, so an import is never `auto`.
+- **For a warning,** the program's behavior is unchanged. Removing an unused import qualifies only
+  while the module stays imported, by another name of the same import or by another module of the
+  program, since dropping a module drops its `var` initializers.
+
+A fix is never `auto` in a file with a syntax error (Every error in one run, below).
 
 ### Warnings
 
@@ -253,17 +273,22 @@ must meet Go vet's bar: it catches a real bug, the bug happens in practice, and 
 correct code. Each warning is silenced by writing the intent in the code, never by a comment or a
 setting. The initial set:
 
-| Code                  | Fires on                                                                                                                                                                                                                                           | Silenced by                                                     |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| `unused-result`       | a value of type `Result` that the program discards: a statement other than a block's value, or the value of a block whose value is discarded. Not the last expression of a `defer` block, whose result the language discards by design (section 8) | `_ = f()`, or `try f()`                                         |
-| `unused-import`       | an imported name the module never uses                                                                                                                                                                                                             | removing it; the fix is `auto`                                  |
-| `unused-variable`     | a local `let` or `var`, or a binding of a destructuring, that is never read. Not `_`, a parameter, or a top-level declaration                                                                                                                      | removing it, or binding `_`                                     |
-| `named-interpolation` | a value of a named primitive type in `"${...}"`, which renders as `UserId("u1")`. Markup already rejects one, since "rendering as a constructor call would put `UserId("u-1")` on a page" (section 5)                                              | `string(x)` for the value, `String.from(x)` for the tagged form |
-| `float-to-int`        | `int(x)`, or another integer conversion, of a float that is not a float literal with no fraction and not the result of `Math.floor`, `Math.ceil`, `Math.round`, or `Math.trunc`                                                                    | rounding first, as `int(Math.floor(x))`, or `Math.toInt(x)`     |
+| Code                  | Fires on                                                                                                                                                                                                                                                                                                            | Silenced by                                                                                                                                                    |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `unused-result`       | a value the program discards whose type is a `Result` or a union with a `Result` member, such as `Result[T, E] \| null`: a statement other than a block's value, the value of a block whose value is discarded, or the last value of a callback whose expected type returns `void`. Not anywhere in a `defer` block | `_ = f()`, or `try f()`                                                                                                                                        |
+| `unused-import`       | an imported name the module never uses                                                                                                                                                                                                                                                                              | removing it                                                                                                                                                    |
+| `unused-variable`     | a local `let` or `var`, or a binding of a destructuring, that is never read. Not `_`, a parameter, or a top-level declaration                                                                                                                                                                                       | removing it, or binding `_`                                                                                                                                    |
+| `named-interpolation` | a value of a named primitive type in `"${...}"`, which renders as `UserId("u1")`. Markup already rejects one, since "rendering as a constructor call would put `UserId("u-1")` on a page" (section 5)                                                                                                               | the base type's conversion for the value, as `string(id)` for `type UserId = string` and `int(c)` for `type Count = int`; `String.from(x)` for the tagged form |
 
-Only `unused-import` has an `auto` fix, removing the import. `unused-result` offers `_ = f()`, and
+`defer` and `go` are treated differently on purpose, though section 8 gives neither block a result.
+A deferred close whose error is dropped is the language's idiom: the error of a close that matters
+is taken by closing explicitly before the block ends, and the deferred close then does nothing. A
+goroutine that drops an `Err` has no such idiom and loses the error for good, so `go` blocks warn.
+In a `go` block `try` is a compile error, so the silencer there is `_ = f()`.
+
+`unused-import` has an `auto` fix under the condition above. `unused-result` offers `_ = f()`, and
 `try f()` inside a function that returns a compatible `Result`, and marks neither, since only the
-author knows whether the error should propagate. The other three offer fixes that are not `auto`.
+author knows whether the error should propagate. The other two offer fixes that are not `auto`.
 
 ### Every error in one run
 
@@ -271,6 +296,11 @@ author knows whether the error should propagate. The other three offer fixes tha
 uses today). It reports every syntax error of a file, then type-checks what parsed, as the editor
 already does. The file still counts as one that cannot be loaded, so the status is still `2`, but
 its other errors are no longer hidden.
+
+What recovery drops is gone from the tree, and the uses in it with it. So in a file with a syntax
+error, the checker reports errors only, computes no warnings, and attaches no `auto` fix: an
+`unused-import` there may name an import the unparsed part needs, and removing it would delete live
+code.
 
 A `redeclared` prelude name no longer stops the file. It is reported, and in that module the
 module's own declaration is used for the rest of the check, so its uses are checked and
@@ -284,8 +314,10 @@ the checker could not determine, so `?` never appears in a message.
 ### `ant check -explain`
 
 `ant check -explain code` prints the code's rule, a short wrong example, and the right one, then
-exits 0. An unknown code is a usage error. The text is the code's entry in `docs/tools/check.md`, so
-the examples are tested like every docs example.
+exits 0. An unknown code, or a retired one, which names the codes that replaced it, is a usage
+error. The catalog in the spec is normative: it fixes each code's rule. The explanations, with their
+examples, are entries of `docs/tools/check.md`, tested like every docs example, and must agree with
+it.
 
 ### `ant code fix`
 
@@ -294,18 +326,26 @@ ant code fix [-diff] [-code list] [-root dir] [path...]
 ```
 
 `fix` applies every `auto` fix in the modules under the paths, the current directory by default,
-checks again, and repeats until no `auto` fix is left, at most 10 rounds. `-code` limits it to the
-listed codes, comma-separated. It writes each file it changes and prints how many fixes it applied
-in each, as `rename` does. `-diff` prints the changes as a unified diff and writes nothing. The
-diagnostics left afterwards go to standard error with their count. The exit status follows
-`ant code`: 0 when it applied a fix or none was needed, 1 when diagnostics are left that have no
-`auto` fix, 2 for a usage, read, or write error.
+checks again, and repeats until no `auto` fix is left. The rounds run on the files held in memory,
+and the files are written once, at the end, or under `-diff` printed as one unified diff of the
+first version against the last, and not written. A file with a syntax error is left as it is.
+`-code` limits both the fixes applied and the diagnostics reported afterwards to the listed codes,
+comma-separated. `fix` prints how many fixes it applied in each file, as `rename` does, and the
+diagnostics left go to standard error with their count.
+
+If `auto` fixes remain after 10 rounds, `fix` stops, writes nothing, and reports the fixes still
+pending: fixes that keep producing fixes are a bug in the checker, not something to apply.
+
+The exit status follows `ant code`: 0 when no error is left, whether or not a fix was applied; 1
+when errors are left, or warnings under `-strict`; 2 for a usage, read, or write error, or when the
+10 rounds run out. Warnings left without `-strict` do not change the status, as in `ant check`.
 
 ### Interaction with other tools
 
-- **`ant test`** reports errors as it does now, with the new fields in its `"error"` events. It does
-  not report warnings, so that its output stays the test report; `ant check` and the editor report
-  them.
+- **`ant test`** reports errors as it does now, with the new fields in its `"error"` events, whose
+  `severity` is always `"error"`. It does not report warnings, so that its output stays the test
+  report; `ant check` and the editor report them. The field is kept so that an `"error"` event and
+  an `ant check -json` object stay one shape.
 - **`ant run`** is unchanged: it does not check.
 - **The language server** publishes each diagnostic with its `code`, a severity of 2 for a warning,
   its `related` places as `relatedInformation`, and the `Unnecessary` tag on `unused-import` and
@@ -314,20 +354,36 @@ diagnostics left afterwards go to standard error with their count. The exit stat
 - **`ant code rename`** refuses programs with errors unless `-force` is given. An error that the
   rename itself removes, a `redeclared` name being renamed, no longer counts.
 
+## Compatibility
+
+Section 4 promises that `ant check` "prints nothing and exits with `0`" on a program with no error,
+and that `-json` writes "one JSON object per error". Both change:
+
+- In text mode, a program with no error may print warnings to standard error. The exit status is
+  still `0`, and standard output stays empty. A script that treats any output on standard error as
+  failure, rather than reading the status, starts failing.
+- Under `-json`, a warning is an object with `"severity": "warning"`. A consumer that counts lines
+  as errors must now read `severity`.
+- A redeclared prelude name exits with `1`, not `2`.
+
+The language server's clients see new fields only. No program that checks today fails without
+`-strict`.
+
 ## Spec changes
 
 - `spec/ant-lang.md` section 4, Checking and running: the diagnostic fields, the text form with the
   code and `warning: `, the count of both severities, the exit status, recovery and cascades, and
-  `-strict` and `-explain`. A pointer to the catalog.
+  `-strict` and `-explain`. "Prints nothing" and "one JSON object per error" become "per
+  diagnostic". A pointer to the catalog.
 - A new `spec/check.md`, beside `fmt.md`, `test.md`, and `doc.md`: the catalog of codes with their
   rules, the warnings with their exact conditions and how each is silenced, the help and fixes the
   checker must offer, and the definition of `auto`.
 - `spec/ant-lang.md` section 2: the duration-literal sentence names its code, `duration-equality`.
 - `spec/test.md` section 2: `"error"` events carry `severity`, `code`, `help`, `fixes`, and
   `related`; warnings are not reported.
-- `private/tools/lsp.md` section 4: codes, severities, related information, tags, and code actions
-  from fixes.
-- `private/tools/code.md`: the `fix` subcommand, and the `rename` exception.
+- The language server's design document, section 4: codes, severities, related information, tags,
+  and code actions from fixes.
+- The `ant code` design document: the `fix` subcommand, and the `rename` exception.
 
 ## Implementation sketch
 
@@ -340,10 +396,10 @@ sets its own codes. Help and fixes are attached at the sites the table lists.
 language server runs it on them. Cascade suppression extends the existing `types.IsInvalid` checks
 to the sites that still report on an invalid type.
 
-Warnings run after checking, from what `check.Info` already records for the editor: `unused-import`
-and `unused-variable` from the uses of each declaration, which `ant code refs` reads;
-`unused-result` and `named-interpolation` from the types of statements and interpolations; and
-`float-to-int` from conversion calls.
+Warnings run after checking, and only for files that parsed, from what `check.Info` already records
+for the editor: `unused-import` and `unused-variable` from the uses of each declaration, which
+`ant code refs` reads; and `unused-result` and `named-interpolation` from the types of statements,
+callbacks, and interpolations.
 
 To measure precision before the warnings ship, run them over every example in `ant/docs` (all
 tested, many hundreds of programs) and `ant/examples`. A warning there is either a bug in a doc or a
@@ -364,21 +420,23 @@ false positive, and each must be resolved one way or the other.
 - `regex-group-index`: `m.groups[k]` with a constant `k` past the group count of the regex literal
   `m` was matched with. It needs the pattern to reach the match, which is local flow analysis.
 - `unused-declaration`: a private top-level function or type of a library module that nothing uses.
-- Search by type for `help`: the same matcher as an `ant doc -find` (report item 5) would rank
-  candidates by their whole signature, not only the first parameter.
+- `float-to-int`: `int(x)` of a float that may have a fraction, which panics. Left out because the
+  spec makes `int(x)` the deliberate exact conversion, so an author who wants the panic has no way
+  to say so: `Math.floor` changes the result and `Math.toInt` adds a `null` branch. It also fires on
+  calls like `int(Math.sqrt(n))` and `int(x * 100.0)` whose fractions the author has ruled out. It
+  needs an asserting form, and a false-positive rate from the docs examples, before it meets the
+  bar.
+- Search by type for `help`: a matcher like a future `ant doc -find` would rank candidates by their
+  whole signature, not only the first parameter.
 
-## Open questions
+## Decided in review
 
-1. **Codes in the text output.** The bracketed code makes every line longer, and the code names the
-   rule, which matters most to tools reading `-json`. Is it worth it in the text? Rust and mypy both
-   print it, and it is what a reader passes to `-explain`.
-2. **Should `ant test` report warnings?** Go's `go test` runs a subset of `go vet` and fails on it.
-   This proposal keeps the test report clean instead.
-3. **Do `useless-test` and `duration-equality` become warnings?** They report legal code that is
-   almost always a mistake, which is what a warning is. They are errors today, and changing them
-   loosens the checker, so this proposal leaves them alone.
-4. **`unused-variable` at a script's top level.** A script's top-level `let` that nothing reads is
-   as likely a bug as a local one, but scripts are also explored by hand, where an unused binding is
-   normal. This proposal leaves top-level declarations out.
-5. **`float-to-int` precision.** `int(Math.pow(2.0, 10.0))` is integral but would warn. Should the
-   checker also accept a conversion of a float computed only from integral literals?
+1. **Codes stay in the text output.** The code is what a reader passes to `-explain`, and Rust and
+   mypy both print it.
+2. **`ant test` does not report warnings.** Go's `go test` runs a subset of `go vet` and fails on
+   it; Ant keeps the test report to tests.
+3. **`useless-test` and `duration-equality` stay errors.** They report legal code that is almost
+   always a mistake, but turning them into warnings would loosen a checker that rejects them today.
+4. **`unused-variable` leaves out a script's top-level bindings.** Scripts are also explored by
+   hand, where an unused binding is normal.
+5. **`float-to-int` moved to Later**, which settles its precision question.
