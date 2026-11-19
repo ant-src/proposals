@@ -1,6 +1,6 @@
 # Proposal: diagnostics with codes, fixes, and warnings
 
-2026-11-19 · Anton
+2026-11-19 · accepted
 
 ## Summary
 
@@ -350,7 +350,8 @@ when errors are left, or warnings under `-strict`; 2 for a usage, read, or write
 - **The language server** publishes each diagnostic with its `code`, a severity of 2 for a warning,
   its `related` places as `relatedInformation`, and the `Unnecessary` tag on `unused-import` and
   `unused-variable`, which editors render faded. Its quick fixes are the diagnostic's fixes, marked
-  preferred when `auto`. The regular expressions in `codeaction.go` go away.
+  preferred when `auto` or when it is the only fix offered, as an import from the one module that
+  exports a name is today. The regular expressions in `codeaction.go` go away.
 - **`ant code rename`** refuses programs with errors unless `-force` is given. An error that the
   rename itself removes, a `redeclared` name being renamed, no longer counts.
 
