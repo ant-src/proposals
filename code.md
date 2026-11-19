@@ -1,6 +1,6 @@
 # Proposal: `ant code`
 
-2026-11-19 · draft · combines `code-dp.md` and `code-tf.md`
+2026-11-19 · accepted
 
 ## Summary
 
@@ -177,16 +177,16 @@ fails prints, in place of its answer, an object with one field, `error`:
 }
 ```
 
-| Code        | When                                                      | Extra field                                 |
-| ----------- | --------------------------------------------------------- | ------------------------------------------- |
-| `usage`     | wrong flags or operands, or a position outside the file   |                                             |
-| `load`      | the location's file cannot be read or parsed              |                                             |
-| `not-found` | the location selects nothing, or a name is not declared   |                                             |
-| `ambiguous` | the location matches more than one binding                | `candidates`: locations                     |
-| `refused`   | the declaration or the new name cannot be renamed         |                                             |
-| `check`     | a program a rename changes has errors                     | `errors`: the objects of `ant check -json`  |
-| `changed`   | a file changed between the analysis and the write         | `paths`                                     |
-| `write`     | a file could not be written                               | `written` and `unwritten`: arrays of paths  |
+| Code        | When                                                    | Extra field                                |
+| ----------- | ------------------------------------------------------- | ------------------------------------------ |
+| `usage`     | wrong flags or operands, or a position outside the file |                                            |
+| `load`      | the location's file cannot be read or parsed            |                                            |
+| `not-found` | the location selects nothing, or a name is not declared |                                            |
+| `ambiguous` | the location matches more than one binding              | `candidates`: locations                    |
+| `refused`   | the declaration or the new name cannot be renamed       |                                            |
+| `check`     | a program a rename changes has errors                   | `errors`: the objects of `ant check -json` |
+| `changed`   | a file changed between the analysis and the write       | `paths`                                    |
+| `write`     | a file could not be written                             | `written` and `unwritten`: arrays of paths |
 
 ### `def`
 
@@ -350,11 +350,11 @@ workspace, not no use anywhere.
 
 ### Exit status
 
-| Status | When                                                                                         |
-| ------ | -------------------------------------------------------------------------------------------- |
-| `0`    | the request was answered, completely, or the files were written                              |
-| `1`    | nothing was found, the location is ambiguous, a rename was refused, or a file changed        |
-| `2`    | the usage is wrong, a file cannot be read, parsed, or written, or the answer is incomplete   |
+| Status | When                                                                                       |
+| ------ | ------------------------------------------------------------------------------------------ |
+| `0`    | the request was answered, completely, or the files were written                            |
+| `1`    | nothing was found, the location is ambiguous, a rename was refused, or a file changed      |
+| `2`    | the usage is wrong, a file cannot be read, parsed, or written, or the answer is incomplete |
 
 These are the statuses of `ant check`: 1 for an answer the caller may not want, 2 for a request that
 could not be carried out in full. An empty list of references is an answer, with status 0.
@@ -396,8 +396,8 @@ ant check calc && ant test calc
 Each feature of `internal/lsp` is a method on `*Server` that takes the protocol's parameter types:
 `definition`, `references`, `hover`, `rename`, `documentSymbols`, and `workspaceSymbols`. `ant code`
 builds a `Server` in process with the root as its workspace folder and the `utf-8` position
-encoding, which the server already supports, opens the location's file as a document read from
-disk, and calls the method. No protocol messages are exchanged.
+encoding, which the server already supports, opens the location's file as a document read from disk,
+and calls the method. No protocol messages are exchanged.
 
 A small exported layer in `internal/lsp` does what a client would otherwise do:
 
@@ -459,20 +459,13 @@ as two adapters, is not needed for any of this, and can follow if the layer grow
 - **Batches.** A `-` location reads one request per line from standard input and answers each in
   turn over one analysis, for callers that ask many questions at once.
 
-## Open questions
+## Decisions
 
 1. **Writing by default.** `rename` writes unless `-diff` is given, as `ant fmt` writes unless
-   `--check` is given, and the check before the write guards it. `gopls rename` goes the other way:
-   it prints, and `-w` writes. That is safer for a person whose tree has uncommitted work.
-2. **Checking before a rename.** Refusing to rename a program with errors is safe, but an agent
-   often renames halfway through a change. The alternative is to rename anyway and print a warning
-   that uses may be missed. `-force` covers both, so the question is only the default.
-3. **Checking after a rename.** `rename` could check the edited text before it writes and confirm
-   that each changed name still binds to the renamed declaration, which catches a capture the
-   collision rules miss. It doubles the analysis; it is left out until such a case is found.
-4. **Formatting after a write.** A rename can lengthen a line past what `ant fmt` would keep on one
-   line. `rename` could run `ant fmt` on each file it changes when that file was formatted before.
-5. **Bare names and the prelude.** `ant code refs File.write` searches the workspace for calls of a
-   prelude function, which is useful when changing how a program handles a library's errors. It
-   costs an analysis of every module of the workspace, where a declaration in a module costs only
-   the modules that import it.
+   `--check` is given; the check before the write guards it.
+2. **Checking before a rename.** `rename` refuses a program with errors, since a use the checker
+   can't type may be missed; the refusal names `-force`.
+3. **Checking after a rename** is left out until a capture the collision rules miss is found.
+4. **Formatting after a write** is left to `ant fmt` (Non-goals).
+5. **Bare names and the prelude.** `ant code refs File.write` searches every module of the
+   workspace; the cost is paid only when asked for.
