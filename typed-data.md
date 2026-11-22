@@ -99,7 +99,7 @@ Unknown keys in the replies are ignored, and an error reads `$.content[2].text: 
 | Python pydantic                              | Decoding by the declared class; `model_validate`, `field_validator`; strict and lax modes | `validate` as a hook; `coerce` as lax mode for text-only sources                           |
 | Go `encoding/json`                           | Ignores unknown keys; fills missing ones with zero values; `UnmarshalJSON` per type       | Ignoring unknown keys, and a hook a type declares on itself. Not zero values: Ant has none |
 | Go `strconv.ParseBool`, `flag`, env decoders | Text-only sources parse numbers and booleans from strings                                 | The exact boolean spellings under `coerce`                                                 |
-| Go `encoding/json/v2` experiment             | Stricter defaults: case-sensitive names, duplicate names rejected                         | A reminder that this policy is a choice, which is why it sits above the Reflect section    |
+| Go `encoding/json/v2`, stable in Go 1.27     | Stricter defaults: case-sensitive names, duplicate names rejected                         | The same defaults: keys match exactly, and `Json.parse` rejects a duplicate name           |
 
 ## The proposal
 
@@ -298,6 +298,22 @@ passes, as serde's `#[serde(tag = "kind")]` does, so `{"kind": "circle", "radius
 `Json.encode` differs from `Json.stringify` in calling `toData` hooks, writing the tag entry,
 writing integer map keys as strings, and checking the value against the type. A JSON that carries
 `Bytes` as base64 is a different policy and walks the type with `Reflect.Value` instead.
+
+**Open: integers above 2^53.** `Json.decode` reads numbers through `Json.parse`, so every number is
+a `float64` before `Type.build` sees it. The JSON `9007199254740993` arrives as
+`9007199254740992.0`, which has no fraction and is in range, so an `int` field takes it and holds
+the wrong number, with no error. Go's `encoding/json/v2` does not have this problem for typed
+fields, since it reads the digits into the integer type, and its documentation warns about exactly
+this loss for untyped values. Two ways out:
+
+- `Json.decode` parses the text into `Type.Data` itself, giving a number written with no fraction
+  and no exponent as `int64` or `uint64` when it fits, and every other number as `float64`. Integer
+  fields are then exact over their whole range. `int | float64` would read the JSON `3` as `3`, not
+  `3.0`, which changes the union rule above.
+- `Type.build` refuses a `float64` beyond ±2^53 for an integer kind, so the loss is an error and
+  never a wrong value. An `int64` identifier above 2^53 then has to travel as a string.
+
+The first is what Go does and is the one to take unless the union rule matters more.
 
 The sentence of `stdlib.md` that defers typed decoding is replaced by these four functions.
 
