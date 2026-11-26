@@ -258,8 +258,8 @@ let jobs = cli.option("jobs", Flags.int, String.toInt(Os.env("JOBS") ?? "") ?? 4
   verbosity levels are an `option("v", Flags.int, 0)` given as `-v=2`.
 - **`required`.** `optional` and a check in the script, which can say what the flag is for.
 - **`--version`.** A `flag` named `version` and two lines of code.
-- **Typed records through `Reflect`.** A library over `typed-data.md` can build a parser from a
-  record type later, on top of these functions.
+- **Typed records through `Reflect`.** A library over `Reflect` can build a parser from a record
+  type later, on top of these functions.
 
 ## Alternatives considered
 

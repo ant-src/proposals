@@ -27,18 +27,18 @@ var signup = try V.decode(text, type(Signup))   // Err: "$.age: at least 13, got
 Reflect.annotation[A](t: Reflect.ErasedType, field: string, a: Reflect.Type[A]): A | null
 ```
 
-The spec calls them "field annotations" in full, every time, since it already says "annotation"
-for a written type ("`ant run` discards them", the `needs-annotation` code).
+The spec calls them "field annotations" in full, every time, since it already says "annotation" for
+a written type ("`ant run` discards them", the `needs-annotation` code).
 
 ## Motivation
 
 ### Validation
 
 A program that reads data from outside, a request body, a config file, a form, wants two things: a
-value of its own type, and a guarantee that the value is in range. `typed-data.md` gives the first
-through `Type.build`. The second is a list of constraints on single fields: at least 13, between 3
+value of its own type, and a guarantee that the value is in range. `typed-json.md` gives the first
+through `Json.decode`. The second is a list of constraints on single fields: at least 13, between 3
 and 32 characters, matching a pattern, one of a few strings. Constraints are many, irregular, and
-different for every field, so no policy for a whole call covers them, the way `key: Type.snakeCase`
+different for every field, so no policy for a whole call covers them, the way `key: Json.snakeCase`
 covers renames.
 
 The two libraries people reach for take opposite sides:
@@ -53,10 +53,10 @@ The two libraries people reach for take opposite sides:
 
 ### What works today, and where it stops
 
-- **Named types with a hook.** `typed-data.md` gives a named type a `validate` hook, so
-  `type Port = uint16` with `Port.validate` is pydantic's `PositiveInt` or `EmailStr`. That is the
-  right tool for a constraint a program reuses. For a one-off one, length 3 to 32 or age at least 13,
-  it needs a named type per combination, and every use site converts with `Age(…)`.
+- **Named types with a hook.** `typed-json.md` lists a `validate` hook on a named type under Later.
+  With it, `type Port = uint16` with `Port.validate` is pydantic's `PositiveInt` or `EmailStr`. That
+  is the right tool for a constraint a program reuses. For a one-off one, length 3 to 32 or age at
+  least 13, it needs a named type per combination, and every use site converts with `Age(…)`.
 - **A record hook.** `Signup.validate` checks fields that must agree, such as a password and its
   confirmation. Written as plain code for single fields, `V.min(s.age, 13)` receives only the value,
   so it cannot name the field in its error unless it is handed the name as a string.
@@ -206,8 +206,8 @@ since an annotation cannot mention a type parameter, all instantiations read the
 
 Each call evaluates that one annotation afresh in the declaration's scope, as a default is evaluated
 per literal, and nothing else: the field's other annotations are not evaluated. A record annotation
-is mutable like any record, and a caller that changes one changes only its copy. A library that reads
-the same field many times, a validator called once per value, caches by `Reflect.Decl`.
+is mutable like any record, and a caller that changes one changes only its copy. A library that
+reads the same field many times, a validator called once per value, caches by `Reflect.Decl`.
 
 A lookup, not a list on `Reflect.Field`, for three reasons. `Reflect.shape` stays a function of the
 type alone and does not evaluate code. A library reads only its own annotation types, so it never
@@ -235,9 +235,9 @@ func rules(t: Reflect.ErasedType, field: string): Check {
 }
 ```
 
-A library should panic on its own annotation where it cannot apply, such as `@V.Check{ minLength: 3 }`
-on an `int` field or `@Xml.Attribute` on a record-typed one, with a message naming the declaration
-and field.
+A library should panic on its own annotation where it cannot apply, such as
+`@V.Check{ minLength: 3 }` on an `int` field or `@Xml.Attribute` on a record-typed one, with a
+message naming the declaration and field.
 
 ### Unchecked runs
 
@@ -250,22 +250,19 @@ side:
 - **Two annotations of one type** are the checker's alone; `Reflect.annotation` returns the first
   written.
 
-## Fit with typed-data.md
+## Fit with typed-json.md
 
-The mechanism is here; the policy stays there. `typed-data.md` keeps its `key` call option as the
+The mechanism is here; the policy stays there. `typed-json.md` keeps its `key` call option as the
 policy of a call, so a record of thirty fields for a snake_case API stays one option and not thirty
-annotations, and declares `Type.Key` as an ordinary prelude type that overrides the policy for one
-field. `Type.Skip` may follow. `tag` stays a call option for a root union and may also be a field
-annotation `@Type.Tag("kind")`. A format on the `Type.Data` path inherits renames for free; a format
-on the `Reflect.Value` path declares and reads its own.
+annotations, and declares `Json.Key` as an ordinary prelude type that overrides the policy for one
+field. `Json.Skip` may follow. `tag` stays a call option for a root union and may also be a field
+annotation `@Json.Tag("kind")`. Every other format walks the type with `Reflect.Value` and declares
+and reads its own annotation types, as `Toml.Key` above.
 
-`Json.stringify` walks values and reads no annotation: with `@Type.Key("max_tokens")` it still
+`Json.stringify` walks values and reads no annotation: with `@Json.Key("max_tokens")` it still
 writes `maxTokens`, where Go's `json.Marshal` honors the tag. Only a typed encoder renames. So this
-proposal lands with or after `typed-data.md`, never before it: field annotations with no reader in
+proposal lands with or after `typed-json.md`, never before it: field annotations with no reader in
 the prelude would promise Go programmers a rename that `Json.stringify` does not do.
-
-The "Under consideration: field annotations" section of `typed-data.md` describes an earlier design
-(before the field, evaluated once, `Type.annotation`) and shrinks to a pointer here.
 
 ## Types you do not own
 
@@ -278,14 +275,14 @@ first call rather than silently. That is a library convention, not part of this 
 
 - **Annotations before the field**, `@V.Check{ min: 13 } age: int`, as in Java and Rust. The first
   draft of this proposal. The field's name moves right or down, behind metadata only a library
-  reads; on a line of its own an annotation turns the field into a continuation line under
-  `fmt.md` 4.5; and it raises the question of whether `private` or `@` comes first.
+  reads; on a line of its own an annotation turns the field into a continuation line under `fmt.md`
+  4.5; and it raises the question of whether `private` or `@` comes first.
 - **A checked block after the declaration**,
   `type Signup = { … } with { age: V.Check{ min: 13 }, … }`. The checker could check the field
   names, and the type stays bare. But every field name is written twice, and the constraints sit
   apart from their fields again.
-- **Validation as code** in `Signup.validate`. Needs no syntax, and the checker checks `s.age`, but a
-  helper gets only the value and cannot name the field in its error.
+- **Validation as code** in `Signup.validate`. Needs no syntax, and the checker checks `s.age`, but
+  a helper gets only the value and cannot name the field in its error.
 - **Named constrained types** for everything, `type Age = int` with a hook. See Motivation: right
   for reused constraints, one type per combination for the rest.
 - **Per-library tables keyed by `Reflect.Decl` and field name.** See Motivation and Types you do not
@@ -327,6 +324,6 @@ first call rather than silently. That is a library convention, not part of this 
 3. **Listing.** A tool such as a schema generator that shows every annotation on a field, of types
    it does not know, cannot use a lookup by type. Leaning: no listing; `ant doc` reads the syntax,
    and a generator reads the annotation types it supports.
-4. **A prototype first.** This proposal waits on `typed-data.md`. Before it is accepted, a
+4. **A prototype first.** This proposal waits on `typed-json.md`. Before it is accepted, a
    validation library written today with named types, hooks, and a checked `Reflect.Decl` table
    shows how much a realistic signup or config type gains from annotations.
