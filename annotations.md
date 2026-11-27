@@ -35,11 +35,11 @@ a written type ("`ant run` discards them", the `needs-annotation` code).
 ### Validation
 
 A program that reads data from outside, a request body, a config file, a form, wants two things: a
-value of its own type, and a guarantee that the value is in range. `typed-json.md` gives the first
-through `Json.decode`. The second is a list of constraints on single fields: at least 13, between 3
-and 32 characters, matching a pattern, one of a few strings. Constraints are many, irregular, and
-different for every field, so no policy for a whole call covers them, the way `key: Json.snakeCase`
-covers renames.
+value of its own type, and a guarantee that the value is in range. A decoder that walks the type
+with `Reflect` gives the first. The second is a list of constraints on single fields: at least 13,
+between 3 and 32 characters, matching a pattern, one of a few strings. Constraints are many,
+irregular, and different for every field, so no policy for a whole call covers them, the way one
+snake_case option covers renames.
 
 The two libraries people reach for take opposite sides:
 
@@ -53,10 +53,10 @@ The two libraries people reach for take opposite sides:
 
 ### What works today, and where it stops
 
-- **Named types with a hook.** `typed-json.md` lists a `validate` hook on a named type under Later.
-  With it, `type Port = uint16` with `Port.validate` is pydantic's `PositiveInt` or `EmailStr`. That
-  is the right tool for a constraint a program reuses. For a one-off one, length 3 to 32 or age at
-  least 13, it needs a named type per combination, and every use site converts with `Age(…)`.
+- **Named types with a hook.** A `validate` hook on a named type would need a language rule of its
+  own. With it, `type Port = uint16` with `Port.validate` is pydantic's `PositiveInt` or `EmailStr`.
+  That is the right tool for a constraint a program reuses. For a one-off one, length 3 to 32 or age
+  at least 13, it needs a named type per combination, and every use site converts with `Age(…)`.
 - **A record hook.** `Signup.validate` checks fields that must agree, such as a password and its
   confirmation. Written as plain code for single fields, `V.min(s.age, 13)` receives only the value,
   so it cannot name the field in its error unless it is handed the name as a string.
@@ -250,19 +250,11 @@ side:
 - **Two annotations of one type** are the checker's alone; `Reflect.annotation` returns the first
   written.
 
-## Fit with typed-json.md
+## Fit with JSON
 
-The mechanism is here; the policy stays there. `typed-json.md` keeps its `key` call option as the
-policy of a call, so a record of thirty fields for a snake_case API stays one option and not thirty
-annotations, and declares `Json.Key` as an ordinary prelude type that overrides the policy for one
-field. `Json.Skip` may follow. `tag` stays a call option for a root union and may also be a field
-annotation `@Json.Tag("kind")`. Every other format walks the type with `Reflect.Value` and declares
-and reads its own annotation types, as `Toml.Key` above.
-
-`Json.stringify` walks values and reads no annotation: with `@Json.Key("max_tokens")` it still
-writes `maxTokens`, where Go's `json.Marshal` honors the tag. Only a typed encoder renames. So this
-proposal lands with or after `typed-json.md`, never before it: field annotations with no reader in
-the prelude would promise Go programmers a rename that `Json.stringify` does not do.
+The prelude declares no annotation types. `Json.stringify` walks values and reads no annotation, so
+a `@Json.Key("max_tokens")` would still write `maxTokens`, where Go's `json.Marshal` honors the tag.
+A format library declares and reads its own annotation types, as `Toml.Key` above.
 
 ## Types you do not own
 
@@ -324,6 +316,6 @@ first call rather than silently. That is a library convention, not part of this 
 3. **Listing.** A tool such as a schema generator that shows every annotation on a field, of types
    it does not know, cannot use a lookup by type. Leaning: no listing; `ant doc` reads the syntax,
    and a generator reads the annotation types it supports.
-4. **A prototype first.** This proposal waits on `typed-json.md`. Before it is accepted, a
-   validation library written today with named types, hooks, and a checked `Reflect.Decl` table
-   shows how much a realistic signup or config type gains from annotations.
+4. **A prototype first.** Before this proposal is accepted, a validation library written today with
+   named types and a checked `Reflect.Decl` table shows how much a realistic signup or config type
+   gains from annotations.

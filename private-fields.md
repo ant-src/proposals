@@ -449,10 +449,6 @@ Getter names still cannot collide with field names. A private field such as `end
 **annotations.md.** Serialization annotations remain codec policy. A future opt-in may include a
 private field, and `@Skip` may omit public state. Neither changes source visibility.
 
-**typed-json.md.** `Json.decode` and `Json.encode` omit private fields by default, and a record
-whose private field has no default cannot be decoded until hooks exist. That proposal states this
-behavior itself (Fit with other proposals), so it is not inferred from this modifier alone.
-
 **frozen.md.** Preserve the original draft's intended compatibility: privacy is not a reason to omit
 fields from freezing. The frozen proposal's own copying and immutability rules remain a separate
 review; private does not itself mean frozen, immutable, or safe to copy.
