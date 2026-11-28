@@ -32,12 +32,14 @@ let text = `{
   "servers": [{"host": "a.example"}, {"host": "b.example", "port": 9000}]
 }`
 
-let config = try Json.decode(text, type(Config))
+let config = try Json.decode(text, type(Config), strict: true)
 println(config.servers[0])        // Server{ host: "a.example", port: 8080, tags: [] }
 println(config.level is Debug)    // true
 
 Json.decode(`{"name": "prod", "servers": [{"host": "a", "port": "9000"}]}`, type(Config))
 // Err: $.servers[0].port: want int, got "9000"
+Json.decode(`{"name": "prod", "servers": [{"host": "a", "prot": 9}]}`, type(Config), strict: true)
+// Err: $.servers[0].prot: unknown field of Server
 ```
 
 Nothing in the language changes: no syntax, no checker rule, no new type. `Json.parse` and
@@ -97,11 +99,14 @@ of each slot, which a function of the value alone cannot know.
 
 `Json.decode(text, t)` reads `text` as `Json.parse` does: one JSON text of RFC 8259, the same
 nesting limit, an object that repeats a name refused. Every message `Json.parse` has for malformed
-text, it has too. It returns `Ok` of a new value of type `T`, or `Err` with the first place the text
-does not fit `t`. `Json.decode(text, type(Json.Value))` is `Json.parse(text)`.
+text, it has too. It returns `Ok` of a new value of type `T`, or `Err` at the first fault it meets
+(Errors). `Json.decode(text, type(Json.Value))` is `Json.parse(text)`.
 
-`Json.decodeValue(value, t)` reads a tree by the same rules and builds new values throughout, so the
-result shares nothing with `value`.
+`Json.decodeValue(value, t)` reads a tree by the same rules, to the same nesting limit. Every array,
+map, set and record it builds is new, so two places that held one array get an array each. A tree
+built in code can be what no text is. One that contains itself panics with `cyclic value`, as in
+`Json.stringify`. `NaN` and the infinities are `float64` values like any other there: they fit a
+float type and no integer type.
 
 `Json.encode(t, value)` returns the text of `value` as `t` describes it. The type comes first, since
 a call solves its type parameters left to right (section 4, Types as values), so
@@ -132,7 +137,7 @@ let page = try Json.decode(body, type(Page[User]))
 | `Array[T]`, `Set[T]`                                            | an array                                               |
 | `Map[K, V]`, where `K` is `string` or a named primitive over it | an object, its entries in order                        |
 | a named record type                                             | an object of its fields in declaration order (Records) |
-| a time type                                                     | its RFC 9557 string, and a `Zone` its identifier       |
+| a time type                                                     | the string `stdlib.md` gives it (Time, Text)           |
 | `Regex.Pattern`                                                 | its rendering as a string, `"/a+/i"`                   |
 | a union                                                         | the form of the member (Unions)                        |
 
@@ -161,14 +166,20 @@ An object is read into a record type as a record literal with the same entries w
 - A field the object leaves out takes its default, evaluated as a literal evaluates it: afresh for
   each record, in the scope of its declaration (section 4, Field defaults). A field with no default
   must be there, and its absence is `Err`: `$.servers[0]: missing field host`.
+- A default is code of the program. It may give a value the program shares, as
+  `tags: Array[string] = shared` does in a literal. One that panics leaves the call as a panic. And
+  one that has run is not undone when a later part of the text fails, so an `Err` does not mean that
+  no default ran.
 - A missing member and `null` are different things, as a missing entry and `null` are in a literal.
   `nick: string | null` must be given, as `null` or a string. `nick: string | null = null` may be
   left out. `port: int = 8080` may be left out, and `"port": null` is `Err`, since `null` is not an
   `int`.
 - A member that names no field is skipped, so a server may add a field without breaking its clients.
-  With `strict: true` it is `Err`, in every record the call reads:
-  `$.servres: unknown field of Config`. That is the literal's own rule, and the one for a file a
-  person edits.
+  Its value is still read as JSON: malformed text, a repeated name or nesting too deep inside it is
+  `Err` all the same, so which texts are JSON never depends on the type. With `strict: true` the
+  member is `Err`, in every record the call reads: `$.servres: unknown field of Config`. That is the
+  literal's own rule, and the one for a file a person edits, where `"prot": 9000` would otherwise
+  leave `port` at its default and say nothing.
 
 A record is written as `Json.stringify` writes it: every field, in declaration order. No field is
 left out for being `null` or equal to its default.
@@ -180,19 +191,30 @@ identifiers (`content-type`, `$ref`), is a `Map`.
 
 ### Numbers
 
-A JSON number is read into a number type by its value.
+A JSON number is read into a number type by its value: the decimal number its digits and exponent
+spell, exactly.
 
-- A float type takes any number, `float64` as `Json.parse` reads it. A finite number beyond the
-  range of a `float32` is `Err`, as `Reflect.makeScalar` has it.
-- An integer type takes a number whose value is an integer in the type's range. A number written
-  with no fraction and no exponent is read digit by digit, so every `int64` and `uint64` reads back
-  exactly: `Json.decode("9007199254740993", type(int))` is `Ok` of `9007199254740993`. A number
-  written with either is read as a `float64` first, as `Json.parse` reads it, and fits where
-  `Math.toInt` gives an integer in range: `1.0` is 1, `1e3` is 1000, and `80.5` fits no integer
-  type.
+- A float type takes any number, rounded to the nearest value the type has, as `Json.parse` rounds
+  to a `float64`. A finite number beyond the range of a `float32` is `Err`, as `Reflect.makeScalar`
+  has it.
+- An integer type takes a number whose value is an integer in the type's range, however it is
+  written: `1`, `1.0` and `1e3` are 1, 1 and 1000, and `80.5` fits no integer type. The test is on
+  the digits and never passes through a `float64`, which would round first and test after.
 
-`Json.decodeValue` has only the `float64` of the tree, so the second half of each rule is all of it.
-This is the rule `Reflect.makeScalar` and the guide's decoder already follow.
+| Text                    | At `int`              | Through a `float64`                  |
+| ----------------------- | --------------------- | ------------------------------------ |
+| `9007199254740993`      | `9007199254740993`    | `9007199254740992`                   |
+| `9007199254740993.0`    | `9007199254740993`    | `9007199254740992`                   |
+| `9223372036854775807.0` | `9223372036854775807` | out of range, rounded up to 2^63     |
+| `1.0000000000000001`    | `Err`                 | `1`, a fraction taken for an integer |
+
+The digits and the exponent settle whether the value is an integer and whether it is in range, with
+64-bit arithmetic, so `1e1000000000` is refused without being computed.
+
+`Json.decodeValue` applies the same rule to what the tree holds, which is a `float64`: an integer
+type takes it where `Math.toInt` gives an integer in range, as `Reflect.makeScalar` does. It cannot
+bring back what `Json.parse` rounded. The tree of `9007199254740993` holds `9007199254740992.0`, and
+that is the number it reads (Two steps).
 
 Numbers are written as `Json.stringify` writes them: an `int` in full, a float with `.0` when
 integral. A reader in JavaScript rounds an integer above 2^53, so a program that writes for one
@@ -257,13 +279,16 @@ type `Circle` or `Circle | null`, and `{"Circle":{"radius":2.0}}` in a field of 
   `A.Circle | B.Circle` from two modules, have no JSON form.
 - **Enumerations** fall out: `Level` is `"Debug"` or `"Info"`. The name is matched exactly. A
   document that spells it `"debug"` is read into a `string` or a named primitive over one.
-- **Beside them.** Together the record members read the object kind, so the union holds no `Map`.
-  When one of them has no fields they read the string kind too, and the union holds no other member
-  that reads a string. `Shape | null` and `Shape | Array[Shape]` are fine.
-- **Reading** an object here needs exactly one member, and `strict` does not bear on that: two
-  members, none, or a name the union does not have are `Err`. A member with no fields is read from
-  the string only, and one with fields from the object only, even when every field has a default:
-  each value has one form.
+- **Reading** takes one more spelling than writing gives, as it does for a number. The name alone is
+  the member with nothing given, so it reads any member that a literal could build with no entries,
+  one whose fields all have defaults: with `type Retry = { times: int = 3 }`, `"Retry"` is
+  `Retry{}`. And the object form reads a member with no fields, `{"Empty":{}}`. The object has
+  exactly one member, and `strict` does not bear on that: two members, none, or a name the union
+  does not have are `Err`.
+- **Beside them.** A union of two or more records reads objects and strings, whichever of its
+  members have fields. So it holds no `Map` and no other member that reads a string, and a member
+  that gains or loses a field never takes the union's JSON form away. `Shape | null` and
+  `Shape | Array[Shape]` are fine.
 - **Unions flatten**, so with `type Label = { text: string }`, `Shape | Label` is one union of four
   records, and `Shape | null` is tagged as `Shape` is.
 
@@ -275,30 +300,63 @@ Json.encode(type(Result[int, Error]), Result.err(error))
 // {"Err":{"error":{"message":"no such file","kind":"Error.NotExist"}}}
 ```
 
-The tag makes two things part of the format that were not before. Renaming a member type changes the
-text, as renaming a field does. And a union that grows from one record to two changes the form of
-the first: `Circle | null` is written bare and `Circle | Rect | null` tagged.
+### Changing a type
+
+The tag makes the shape of a union part of the format, in three ways.
+
+- **Renaming a member type** changes the text, as renaming a field does.
+- **A second record** changes the form of the first: `Circle | null` is written bare and
+  `Circle | Rect | null` tagged. Text written before the change does not read after it. A slot that
+  may grow a second record is better declared with both from the start.
+- **A first field** on a member that had none changes what is written, from `"Start"` to
+  `{"Start":{"urgent":false}}`. When the field has a default, both sides still read each other. The
+  new program reads the old text, since the name alone is the member with nothing given. The old
+  program reads the new text unless it is strict, since the object form reads its empty `Start` and
+  the member `urgent` is skipped. That is what adding a field with a default does to any record.
 
 ### Two steps
 
 JSON from elsewhere marks its variants its own way, often with a member such as `"type": "push"`
-beside the fields it selects. `Json.decode` does not guess at that. The program reads the fixed
-part, keeps the rest as a tree, and reads the tree once it knows the type, which is what
-`json.RawMessage` is for in Go:
+beside the fields it selects. `Json.decode` does not guess at that. The program reads the part that
+decides first, and the rest once it knows the type. There are two ways.
+
+**Read the text twice**: once into a record of the members that decide, the others skipped, and once
+into the full type. Both readings are of the text, so nothing is lost.
 
 ```ant
-type Request = { id: int | null = null, method: string, params: Json.Value = null }
+type Head = { method: string }
+type Call[P] = { id: int | null = null, method: string, params: P }
 type Rename = { path: string, to: string }
 
 func handle(line: string): Result[void, Error] {
-  let req = try Json.decode(line, type(Request))
-  if req.method == "rename" {
-    let p = try (Json.decodeValue(req.params, type(Rename)) | Result.wrapErr("rename"))
-    try File.rename(p.path, p.to)
+  let head = try Json.decode(line, type(Head))
+  if head.method == "rename" {
+    let call = try Json.decode(line, type(Call[Rename]))
+    try File.rename(call.params.path, call.params.to)
   }
   Result.ok(void)
 }
 ```
+
+**Keep a tree.** When each element of an array has a type of its own, no one type serves the second
+reading. The part that varies is a `Json.Value`, and `Json.decodeValue` reads it:
+
+```ant
+type Event = { type: string, payload: Json.Value }
+type Push = { branch: string, commits: int }
+
+let events = try Json.decode(body, type(Array[Event]))
+for event in events {
+  if event.type == "push" {
+    let push = try Json.decodeValue(event.payload, type(Push))
+    println("${push.commits} commits to ${push.branch}")
+  }
+}
+```
+
+Go keeps such a part as a `json.RawMessage`, which is the text. A tree is not: a number in it is a
+`float64`, so an integer above 2^53 inside `payload` is rounded before `Json.decodeValue` sees it
+(Numbers). A program that needs such a number keeps the text of each element and reads it twice.
 
 `Json.decodeValue` is also how a tree from any other source becomes a record: one built in code, or
 one that a parser for another format returns.
@@ -321,8 +379,13 @@ $.limits["max-size"]: want int, got null
 The path starts at `$`, a field or a key that is an identifier follows a `.`, any other key is in
 brackets as a JSON string, and an array index is in brackets. The type renders as `String.from`
 renders it, an alias by its name. A scalar is shown as its JSON text, and an array or an object by
-the word. The decoder stops at the first error, in the order of the text; a field left out is
-reported when its object ends. `kind` is `null`.
+the word. `kind` is `null`.
+
+The decoder reads the text once and stops at the first fault it meets, in the order of the text,
+whether the text is malformed there or does not fit the type. A field left out is reported when its
+object ends. So `{"port": "x", "other": }` at a record with `port: int` is `Err` for `$.port`, and
+the malformed member after it is never reached. `Json.decode` gives `Json.parse`'s message only when
+the malformed place comes first.
 
 ### No JSON form
 
@@ -338,21 +401,27 @@ Json.encode: Shape | Map[string, int]: Circle and Map[string, int] are both read
 ```
 
 A panic and not an `Err`, because the fault is in the program and no input changes it: the call
-panics every time, so the first run of any test finds it. `ant check` does not report it, since the
-type may arrive through a `Reflect.Type[T]` parameter. An implementation works a type out once and
-keeps the result.
+panics every time it is reached with that type, so any test that reaches it finds it. `ant check`
+does not report it, since the type may arrive through a `Reflect.Type[T]` parameter. An
+implementation works a type out once and keeps the result. A type that names itself is worked out
+like any other: `type Node = { value: string, next: Node | null = null }` has a JSON form.
 
-`Json.encode` also panics where `Json.stringify` does on a value: on `NaN` or an infinity, and on a
-value that contains itself. Under `ant run` it trusts that `value` belongs to `t`, as
-`Reflect.valueOf` does (section 11, Reflect, Unchecked runs).
+A value can be at fault too. `Json.encode` panics where `Json.stringify` does: on `NaN` or an
+infinity, and on a value that contains itself. `Json.decodeValue` panics on a tree that contains
+itself. Under `ant run`, `Json.encode` trusts that `value` belongs to `t`, as `Reflect.valueOf` does
+(section 11, Reflect, Unchecked runs).
 
 ### The round trip
 
 For a type `t` with a JSON form and a value `v` that `Json.encode` writes,
-`Json.decode(Json.encode(t, v), t)` is `Ok` of a value `==` to `v`. Two things are not kept. A
-`Duration` reads back with its fraction spread, equal under `Time.compareDuration` and not under
-`==`, as `stdlib.md` already says of its text. And sharing: two fields that held one array read back
-as two arrays.
+`Json.decode(Json.encode(t, v), t)` is `Ok` of a value `==` to `v`, with three exceptions.
+
+- **Depth.** `Json.encode` has no nesting limit, as `Json.stringify` has none, and `Json.decode` has
+  `Json.parse`'s. A list of 20000 linked records is written and then refused. A tagged member counts
+  two levels, its own object and the one that names it.
+- **A `Duration`** reads back with its fraction spread, equal under `Time.compareDuration` and not
+  under `==`, as `stdlib.md` already says of its text.
+- **Sharing.** Two fields that held one array read back as two arrays.
 
 `Json.encode(t, v)` and `Json.stringify(v)` give the same text unless `t` reaches a union of two or
 more records. So `Json.stringify` remains the way to write a value without naming its type, such as
@@ -368,6 +437,9 @@ will read the text.
 - **Private fields** (`private-fields.md`) recommends that a type-directed codec leave private
   fields out when writing and to their defaults when reading. `Json.encode` and `Json.decode` are
   such a codec and would follow that rule when it lands; until then every field is read and written.
+  Two things here would then need a decision there. The round trip holds only up to private fields,
+  which `==` still compares. And "a member with no fields" has to mean no fields that are written,
+  or a private field would turn `"Start"` into `{"Start":{}}`.
 
 ## Alternatives
 
@@ -390,9 +462,13 @@ will read the text.
   question 2.
 - **Tags in `Json.stringify`.** It has only the value and cannot know that a slot is a union.
   Writing every record under its name would change the text of every program.
-- **Go's integer rule**, where `1.0` is not an integer. Stricter, and exact with no second case. But
-  `Json.decodeValue` cannot follow it, since the tree does not keep how a number was written, and
-  the two functions would then disagree on one document.
+- **Go's integer rule**, where `1.0` is not an integer. The simplest exact rule. But JSON has one
+  kind of number, and a writer that holds a float spells five as `5.0`, as Python's `json.dumps`
+  does. Reading by value takes it, and it is the rule `Json.decodeValue` has to follow anyway, since
+  a tree does not keep how a number was written.
+- **An integer through a `float64`**: read any number with a fraction or an exponent as `Json.parse`
+  does, then test it. The first draft of this proposal. It takes `1.0000000000000001` for 1 and
+  moves `9007199254740993.0` by one, without a word.
 - **A missing member as `null`** wherever the field's type allows it, as serde's `Option` and a Go
   pointer have it. Ant has no zero values (section 4, Field defaults), and `= null` in the
   declaration says the same thing in one place, for literals too.
@@ -401,8 +477,11 @@ will read the text.
   Each makes two texts mean one value, and section 1 has it that a value never changes type without
   a visible conversion.
 - **Hooks**: a function on a type that the decoder calls, as Go's `UnmarshalJSON`. It needs a rule
-  for how the runtime finds the function. Two steps cover the same ground with code the program can
-  see.
+  for how the runtime finds the function. Two steps do the common cases in code the program can see,
+  at the price of a second reading or of a tree's numbers.
+- **One spelling per member on the way in**: `"Start"` only for a member with no fields, the object
+  only for one with fields. The first draft. It made a first field with a default a change neither
+  side could read, where the same change to a plain record is harmless.
 
 ## Costs
 
@@ -410,8 +489,8 @@ will read the text.
   `Reflect.valueOf` today.
 - In the runtime, beside `Json.parse` and `Json.stringify`: the analysis of a type, kept per type; a
   decoder over the existing scanner that builds a record as `Reflect.makeRecord` does; and an
-  encoder that is `Json.stringify`'s writer with the tag added. The scanner learns to keep an
-  integer as written. None of it is written yet, so its size is not known.
+  encoder that is `Json.stringify`'s writer with the tag added. The scanner learns to test a
+  number's digits against an integer type. None of it is written yet, so its size is not known.
 - Documentation: three pages under `lib/Json`, and the "Typed decoding" section of
   `guide/runtime-types.md`, whose decoder stays as the example of a walk over `Reflect` for a format
   the library does not have.
@@ -422,7 +501,8 @@ will read the text.
 - `stdlib.md`, Json: the three signatures, and this design in place of the sentences that send a
   program to a function per type or to `Reflect`.
 - `stdlib.md`, the opening paragraph: the three functions join `Json.stringify` among the
-  exceptions, since they panic on a type with no JSON form.
+  exceptions, since they panic on a type with no JSON form, and `Json.decodeValue` on a tree that
+  contains itself.
 - `ant-lang.md`, section 8: `loadConfig` in `try` and Wrapping errors ends in
   `Json.decode(text, type(Config))` in place of `Config.fromJson(json)`.
 - `ant-lang.md`, section 11, Reflect: the opening names `Json.decode` as the library's own policy
@@ -444,8 +524,9 @@ will read the text.
 
 1. **Unknown members.** Skipped unless `strict: true`, as written, so that a client survives a
    server that adds a field. The other default catches a misspelled key in a config file without the
-   author asking for it, and matches the record literal. Leaning: as written, since the first
-   failure reaches production and the second is found while writing the config.
+   author asking for it, and matches the record literal. Neither failure is loud: a client that
+   breaks on a new field breaks in production, and `"prot": 9000` beside a default says nothing at
+   all. Leaning: as written, with `strict: true` in every example that reads a file a person edits.
 2. **The tag's form.** `{"Circle":{"radius":2.0}}` as written, or `{"$type":"Circle","radius":2.0}`.
    The second is closer to what TypeScript and OpenAPI clients expect; the first needs no reserved
    name and no reading ahead. Leaning: as written.
@@ -453,10 +534,13 @@ will read the text.
    must know the encoding, and with a type on both sides the reader does. Leaning: leave it out
    until a program needs it, then standard base64 with padding in `Json.encode` and `Json.decode`
    only.
-4. **`Json.decodeValue` now or later.** It is the smallest of the three, and without it a
-   `Json.Value` field is a dead end for typed code. Leaning: now.
+4. **`Json.decodeValue` now or later.** Reading the text twice covers a single envelope without it.
+   An array whose elements differ needs it, and it brings rules of its own: cycles, the nesting
+   limit, numbers the tree has already rounded. Leaning: now.
 5. **`int | float64`.** Refused as written. Ant's own text tells the two apart, `1` and `1.0`, but
    JavaScript writes both as `1`. Leaning: refused; a field that takes both is a `float64`.
 6. **Measure before accepting.** The benchmark behind the numbers in Motivation should run against a
    prototype of the decoder. The expectation to test is that it runs at or under the hand-written
-   decoders, since the work per node is the scanner's plus one builder call.
+   decoders, since the work per node is the scanner's plus one builder call. A script reads one
+   small config once, so the measurement includes that case, where working the type out is most of
+   the cost.
