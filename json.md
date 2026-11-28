@@ -79,7 +79,7 @@ of each slot, which a function of the value alone cannot know.
   `RejectUnknownMembers` in v2). An integer field refuses `1.0`. A missing member leaves the zero
   value. Go has no sum types, so a part whose type depends on another member is kept as a
   `json.RawMessage` and decoded in a second step. This proposal takes the reflective walk, the
-  default for unknown members and the second step.
+  default for unknown members, the integer rule and the second step.
 - **Rust serde.** An enum is externally tagged by default: `{"Circle":{"radius":2.0}}`, and a
   variant with no data is `"Empty"`. Internal, adjacent and untagged forms are attributes, and
   untagged takes the first variant that deserializes. Swift's synthesized `Codable` writes an enum
@@ -191,30 +191,29 @@ identifiers (`content-type`, `$ref`), is a `Map`.
 
 ### Numbers
 
-A JSON number is read into a number type by its value: the decimal number its digits and exponent
-spell, exactly.
+A JSON number is read into a number type as Go's `encoding/json` reads it.
 
 - A float type takes any number, rounded to the nearest value the type has, as `Json.parse` rounds
   to a `float64`. A finite number beyond the range of a `float32` is `Err`, as `Reflect.makeScalar`
   has it.
-- An integer type takes a number whose value is an integer in the type's range, however it is
-  written: `1`, `1.0` and `1e3` are 1, 1 and 1000, and `80.5` fits no integer type. The test is on
-  the digits and never passes through a `float64`, which would round first and test after.
+- An integer type takes a number written as an integer, with no fraction and no exponent, in the
+  type's range. The digits are the value, so every `int64` and `uint64` reads back exactly:
+  `Json.decode("9007199254740993", type(int))` is `Ok` of `9007199254740993`. A number written any
+  other way is `Err` at an integer type, whatever its value: `1.0`, `1e3` and `80.5` alike, as
+  `$.port: want int, got 1.0`.
 
-| Text                    | At `int`              | Through a `float64`                  |
-| ----------------------- | --------------------- | ------------------------------------ |
-| `9007199254740993`      | `9007199254740993`    | `9007199254740992`                   |
-| `9007199254740993.0`    | `9007199254740993`    | `9007199254740992`                   |
-| `9223372036854775807.0` | `9223372036854775807` | out of range, rounded up to 2^63     |
-| `1.0000000000000001`    | `Err`                 | `1`, a fraction taken for an integer |
+That is the line Ant draws in source, where `1` is never a float and `1.0` never an `int` (section
+2, Literals), and the line its own writer keeps: `Json.stringify` writes an `int` as `1` and a float
+as `1.0`. JavaScript writes every integer in the `int64` range with neither. A writer that spells
+five as `5.0`, as Python does for a float, has said that the number is a float, and the field that
+takes it is one.
 
-The digits and the exponent settle whether the value is an integer and whether it is in range, with
-64-bit arithmetic, so `1e1000000000` is refused without being computed.
-
-`Json.decodeValue` applies the same rule to what the tree holds, which is a `float64`: an integer
-type takes it where `Math.toInt` gives an integer in range, as `Reflect.makeScalar` does. It cannot
-bring back what `Json.parse` rounded. The tree of `9007199254740993` holds `9007199254740992.0`, and
-that is the number it reads (Two steps).
+`Json.decodeValue` has no text to go by. A number in a tree is a `float64` whichever way it was
+written, `5` and `5.0` alike, so an integer type takes it by value, where `Math.toInt` gives an
+integer in range, as `Reflect.makeScalar` does. So the two functions differ on one text: `5.0` at an
+`int` is `Err` from `Json.decode`, and 5 through `Json.parse` and `Json.decodeValue`. Nor can
+`Json.decodeValue` bring back what `Json.parse` rounded. The tree of `9007199254740993` holds
+`9007199254740992.0`, and that is the number it reads (Two steps).
 
 Numbers are written as `Json.stringify` writes them: an `int` in full, a float with `.0` when
 integral. A reader in JavaScript rounds an integer above 2^53, so a program that writes for one
@@ -279,9 +278,9 @@ type `Circle` or `Circle | null`, and `{"Circle":{"radius":2.0}}` in a field of 
   `A.Circle | B.Circle` from two modules, have no JSON form.
 - **Enumerations** fall out: `Level` is `"Debug"` or `"Info"`. The name is matched exactly. A
   document that spells it `"debug"` is read into a `string` or a named primitive over one.
-- **Reading** takes one more spelling than writing gives, as it does for a number. The name alone is
-  the member with nothing given, so it reads any member that a literal could build with no entries,
-  one whose fields all have defaults: with `type Retry = { times: int = 3 }`, `"Retry"` is
+- **Reading** takes one more spelling than writing gives, as it does for a `Duration`. The name
+  alone is the member with nothing given, so it reads any member that a literal could build with no
+  entries, one whose fields all have defaults: with `type Retry = { times: int = 3 }`, `"Retry"` is
   `Retry{}`. And the object form reads a member with no fields, `{"Empty":{}}`. The object has
   exactly one member, and `strict` does not bear on that: two members, none, or a name the union
   does not have are `Err`.
@@ -462,13 +461,11 @@ will read the text.
   question 2.
 - **Tags in `Json.stringify`.** It has only the value and cannot know that a slot is a union.
   Writing every record under its name would change the text of every program.
-- **Go's integer rule**, where `1.0` is not an integer. The simplest exact rule. But JSON has one
-  kind of number, and a writer that holds a float spells five as `5.0`, as Python's `json.dumps`
-  does. Reading by value takes it, and it is the rule `Json.decodeValue` has to follow anyway, since
-  a tree does not keep how a number was written.
-- **An integer through a `float64`**: read any number with a fraction or an exponent as `Json.parse`
-  does, then test it. The first draft of this proposal. It takes `1.0000000000000001` for 1 and
-  moves `9007199254740993.0` by one, without a word.
+- **An integer by its value**, where `1.0` and `1e3` fit an `int`. Kinder to a writer that holds a
+  float. Read through a `float64`, as the first draft had it, it takes `1.0000000000000001` for 1
+  and moves `9007199254740993.0` by one, without a word. Read exactly from the digits and the
+  exponent it is correct, but the decoder then carries a second reading of numbers, and a float
+  written where an integer was meant passes unnoticed. Go refuses, and so does Ant's own source.
 - **A missing member as `null`** wherever the field's type allows it, as serde's `Option` and a Go
   pointer have it. Ant has no zero values (section 4, Field defaults), and `= null` in the
   declaration says the same thing in one place, for literals too.
@@ -489,8 +486,8 @@ will read the text.
   `Reflect.valueOf` today.
 - In the runtime, beside `Json.parse` and `Json.stringify`: the analysis of a type, kept per type; a
   decoder over the existing scanner that builds a record as `Reflect.makeRecord` does; and an
-  encoder that is `Json.stringify`'s writer with the tag added. The scanner learns to test a
-  number's digits against an integer type. None of it is written yet, so its size is not known.
+  encoder that is `Json.stringify`'s writer with the tag added. The scanner learns to read a
+  number's digits as an integer. None of it is written yet, so its size is not known.
 - Documentation: three pages under `lib/Json`, and the "Typed decoding" section of
   `guide/runtime-types.md`, whose decoder stays as the example of a walk over `Reflect` for a format
   the library does not have.
